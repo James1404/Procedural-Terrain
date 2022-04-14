@@ -8,27 +8,26 @@ namespace math
 	{
 		T x, y;
 
-		constexpr vector()
-			: x(0), y(0)
-		{}
+		inline constexpr vector() = default;
+		inline ~vector() = default;
 
 		template<typename X, typename Y>
-		constexpr vector(X x, Y y)
+		inline constexpr vector(X x, Y y)
 			: x(static_cast<T>(x)),
 			  y(static_cast<T>(y))
 		{}
 
 		template<typename V>
-		constexpr vector(V v)
+		inline constexpr vector(V v)
 			: x(static_cast<T>(v)),
 			  y(static_cast<T>(v))
 		{}
 
-		constexpr vector(const vector<2,T>& other)
+		inline constexpr vector(const vector<2,T>& other)
 			: vector(other.x, other.y)
 		{}
 
-		constexpr vector<2,T>& operator=(const vector<2,T>& other)
+		inline constexpr vector<2,T>& operator=(const vector<2,T>& other)
 		{
 			if(this == &other)
 			{
@@ -41,10 +40,8 @@ namespace math
 			return *this;
 		}
 
-		~vector() = default;
-
 		// unaray operators
-		vector<2,T> operator+=(const vector<2,T>& other)
+		inline vector<2,T> operator+=(const vector<2,T>& other)
 		{
 			x += other.x;
 			y += other.y;
@@ -52,7 +49,7 @@ namespace math
 			return *this;
 		}
 
-		vector<2,T> operator-=(const vector<2,T>& other)
+		inline vector<2,T> operator-=(const vector<2,T>& other)
 		{
 			x -= other.x;
 			y -= other.y;
@@ -60,7 +57,7 @@ namespace math
 			return *this;
 		}
 
-		vector<2,T> operator*=(const vector<2,T>& other)
+		inline vector<2,T> operator*=(const vector<2,T>& other)
 		{
 			x *= other.x;
 			y *= other.y;
@@ -68,7 +65,7 @@ namespace math
 			return *this;
 		}
 
-		vector<2,T> operator/=(const vector<2,T>& other)
+		inline vector<2,T> operator/=(const vector<2,T>& other)
 		{
 			x /= other.x;
 			y /= other.y;
@@ -77,7 +74,7 @@ namespace math
 		}
 
 		template<typename S>
-		vector<2,T> operator+=(const S& other)
+		inline vector<2,T> operator+=(const S& other)
 		{
 			x += other;
 			y += other;
@@ -86,7 +83,7 @@ namespace math
 		}
 
 		template<typename S>
-		vector<2,T> operator-=(const S& other)
+		inline vector<2,T> operator-=(const S& other)
 		{
 			x -= other;
 			y -= other;
@@ -95,7 +92,7 @@ namespace math
 		}
 
 		template<typename S>
-		vector<2,T> operator*=(const S& other)
+		inline vector<2,T> operator*=(const S& other)
 		{
 			x *= other;
 			y *= other;
@@ -104,7 +101,7 @@ namespace math
 		}
 
 		template<typename S>
-		vector<2,T> operator/=(const S& other)
+		inline vector<2,T> operator/=(const S& other)
 		{
 			x /= other;
 			y /= other;
@@ -115,42 +112,42 @@ namespace math
 
 	// binary operators
 	template<typename T>
-	bool operator==(const vector<2,T>& lhs, const vector<2,T>& rhs)
+	inline bool operator==(const vector<2,T>& lhs, const vector<2,T>& rhs)
 	{
 		return lhs.x == rhs.x &&
 			   lhs.y == rhs.y;
 	}
 
 	template<typename T>
-	bool operator!=(const vector<2,T>& lhs, const vector<2,T>& rhs)
+	inline bool operator!=(const vector<2,T>& lhs, const vector<2,T>& rhs)
 	{
 		return lhs.x != rhs.x &&
 			   lhs.y != rhs.y;
 	}
 
 	template<typename T>
-	vector<2,T> operator+(const vector<2,T>& lhs, const vector<2,T>& rhs)
+	inline vector<2,T> operator+(const vector<2,T>& lhs, const vector<2,T>& rhs)
 	{
 		return vector<2,T>(lhs.x + rhs.x,
 						   lhs.y + rhs.y);
 	}
 
 	template<typename T>
-	vector<2,T> operator-(const vector<2,T>& lhs, const vector<2,T>& rhs)
+	inline vector<2,T> operator-(const vector<2,T>& lhs, const vector<2,T>& rhs)
 	{
 		return vector<2,T>(lhs.x - rhs.x,
 						   lhs.y - rhs.y);
 	}
 
 	template<typename T>
-	vector<2,T> operator*(const vector<2,T>& lhs, const vector<2,T>& rhs)
+	inline vector<2,T> operator*(const vector<2,T>& lhs, const vector<2,T>& rhs)
 	{
 		return vector<2,T>(lhs.x * rhs.x,
 						   lhs.y * rhs.y);
 	}
 
 	template<typename T>
-	vector<2,T> operator/(const vector<2,T>& lhs, const vector<2,T>& rhs)
+	inline vector<2,T> operator/(const vector<2,T>& lhs, const vector<2,T>& rhs)
 	{
 		return vector<2,T>(lhs.x / rhs.x,
 						   lhs.y / rhs.y);
@@ -158,28 +155,28 @@ namespace math
 
 	// Right hand scalar
 	template<typename T, typename S>
-	vector<2,T> operator+(const vector<2,T>& lhs, const S& rhs)
+	inline vector<2,T> operator+(const vector<2,T>& lhs, const S& rhs)
 	{
 		return vector<2,T>(lhs.x + rhs,
 						   lhs.y + rhs);
 	}
 
 	template<typename T, typename S>
-	vector<2,T> operator-(const vector<2,T>& lhs, const S& rhs)
+	inline vector<2,T> operator-(const vector<2,T>& lhs, const S& rhs)
 	{
 		return vector<2,T>(lhs.x - rhs,
 						   lhs.y - rhs);
 	}
 
 	template<typename T, typename S>
-	vector<2,T> operator*(const vector<2,T>& lhs, const S& rhs)
+	inline vector<2,T> operator*(const vector<2,T>& lhs, const S& rhs)
 	{
 		return vector<2,T>(lhs.x * rhs,
 						   lhs.y * rhs);
 	}
 
 	template<typename T, typename S>
-	vector<2,T> operator/(const vector<2,T>& lhs, const S& rhs)
+	inline vector<2,T> operator/(const vector<2,T>& lhs, const S& rhs)
 	{
 		return vector<2,T>(lhs.x / rhs,
 						   lhs.y / rhs);
@@ -187,28 +184,28 @@ namespace math
 
 	// Left hand scalar
 	template<typename T, typename S>
-	vector<2,T> operator+(const S& lhs, const vector<2,T>& rhs)
+	inline vector<2,T> operator+(const S& lhs, const vector<2,T>& rhs)
 	{
 		return vector<2,T>(lhs + rhs.x,
 						   lhs + rhs.y);
 	}
 
 	template<typename T, typename S>
-	vector<2,T> operator-(const S& lhs, const vector<2,T>& rhs)
+	inline vector<2,T> operator-(const S& lhs, const vector<2,T>& rhs)
 	{
 		return vector<2,T>(lhs - rhs.x,
 						   lhs - rhs.y);
 	}
 
 	template<typename T, typename S>
-	vector<2,T> operator*(const S& lhs, const vector<2,T>& rhs)
+	inline vector<2,T> operator*(const S& lhs, const vector<2,T>& rhs)
 	{
 		return vector<2,T>(lhs * rhs.x,
 						   lhs * rhs.y);
 	}
 
 	template<typename T, typename S>
-	vector<2,T> operator/(const S& lhs, const vector<2,T>& rhs)
+	inline vector<2,T> operator/(const S& lhs, const vector<2,T>& rhs)
 	{
 		return vector<2,T>(lhs / rhs.x,
 						   lhs / rhs.y);
@@ -216,7 +213,7 @@ namespace math
 
 	// Functions
 	template<typename T>
-	float distance(const vector<2,T>& lhs, const vector<2,T>& rhs)
+	inline float distance(const vector<2,T>& lhs, const vector<2,T>& rhs)
 	{
 #ifdef USE_GLM
 		glm::vec2 v1(lhs.x, lhs.y);
@@ -229,7 +226,7 @@ namespace math
 	}
 
 	template<typename T>
-	float length(const vector<2,T>& v)
+	inline float length(const vector<2,T>& v)
 	{
 #ifdef USE_GLM
 		glm::vec2 vec(v.x, v.y);
@@ -240,7 +237,7 @@ namespace math
 	}
 
 	template<typename T>
-	float dot(const vector<2,T>& lhs, const vector<2,T>& rhs)
+	inline float dot(const vector<2,T>& lhs, const vector<2,T>& rhs)
 	{
 #ifdef USE_GLM
 		glm::vec2 v1(lhs.x, lhs.y);
@@ -256,7 +253,7 @@ namespace math
 	}
 
 	template<typename T>
-	vector<2,T> cross(const vector<2,T>& lhs, const vector<2,T>& rhs)
+	inline vector<2,T> cross(const vector<2,T>& lhs, const vector<2,T>& rhs)
 	{
 #ifdef USE_GLM
 		glm::vec2 v1(lhs.x, lhs.y);
@@ -267,7 +264,7 @@ namespace math
 	}
 
 	template<typename T>
-	vector<2,T> normalize(const vector<2,T>& v)
+	inline vector<2,T> normalize(const vector<2,T>& v)
 	{
 #ifdef USE_GLM
 		glm::vec2 vec(v.x, v.y);
@@ -277,7 +274,7 @@ namespace math
 	}
 
 	template<typename T>
-	vector<2,T> reflect(const vector<2,T>& lhs, const vector<2,T>& rhs)
+	inline vector<2,T> reflect(const vector<2,T>& lhs, const vector<2,T>& rhs)
 	{
 #ifdef USE_GLM
 		glm::vec2 v1(lhs.x, lhs.y);
@@ -290,7 +287,7 @@ namespace math
 
 // TODO: Remove vector3_to_glm_vec3
 template<typename T>
-glm::vec2 vector2_to_glm_vec2(math::vector<2,T>& v)
+inline glm::vec2 vector2_to_glm_vec2(math::vector<2,T>& v)
 {
 #ifdef USE_GLM
 	return glm::vec2(v.x,v.y);

@@ -15,7 +15,7 @@ namespace math
 	namespace basic
 	{
 		template<typename T>
-		T sqrt(T t)
+		inline T sqrt(T t)
 		{
 			// TODO: This is temporary will be replaced 
 			// with proper implementation
@@ -24,24 +24,25 @@ namespace math
 		}
 
 		template<typename T>
-		T cos(T t)
+		inline T cos(T t)
 		{
 			return std::cos(t);
 		}
 
 		template<typename T>
-		T sin(T t)
+		inline T sin(T t)
 		{
 
 			return std::sin(t);
 		}
 
 		template<typename T>
-		T tan(T t)
+		inline T tan(T t)
 		{
 			return std::tan(t);
 		}
 	}
 
 	template<size_t L, typename T> struct vector;
+	template<size_t LA, size_t LB, typename T> struct matrix;
 }

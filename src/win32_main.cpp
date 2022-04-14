@@ -30,6 +30,7 @@
 #include <string>
 #include <memory>
 #include <iostream>
+#include <algorithm>
 
 template <typename ...Args>
 inline void log(Args&& ..._args)
@@ -90,7 +91,7 @@ inline vector3f move_towards(const vector3f pos, const vector3f target, const fl
 		return target;
 	}
 
-	const vector3f direction = delta / glm::sqrt(len2);
+	const vector3f direction = delta / math::basic::sqrt(len2);
 
 	return pos + step * direction;
 }
@@ -898,6 +899,8 @@ struct water_t
 	int water_size = 50;
 	float water_height = 0;
 
+	// TODO: Have water follow camera at all times, but still update as if it is moving(you get it....)
+	// TODO: Infinite water
 	// TODO: Environment mapping for water
 	// TODO: Water Alpha
 	// TODO: Water ripples.
@@ -905,7 +908,9 @@ struct water_t
 	// TODO: Water foam at edges.
 	// TODO: Water waves. (i need to look into tesselation)
 	// TODO: Water specularity.
-	// TODO: Infinite water
+	// TODO: Water caustics
+	// TODO: Water post proccessing effect
+
 	water_t(int size, float height)
 		: water_size(size), water_height(height)
 	{
@@ -1139,9 +1144,109 @@ struct water_t
 	}
 };
 
-constexpr size_t grid_array_size = 500;
+struct player_t
+{
+	camera_t camera;
+
+	void update()
+	{
+		if(input_manager.mouse_button_held(mouse_button_right))
+		{
+			constexpr float default_camera_rotate_speed = 0.5f;
+			constexpr float default_camera_move_speed = 0.1f;
+
+			// CAMERA ROTATION
+			vector2i mouse_delta = input_manager.get_mouse_delta();
+			vector3f camera_rotation = vector3f(mouse_delta.y, -mouse_delta.x, 0);
+			camera_rotation *= default_camera_rotate_speed;
+			camera.rotation += camera_rotation;
+
+			if(camera.rotation.y > 360.0f)
+			{
+				camera.rotation.y -= 360.0f;
+			}
+			if(camera.rotation.y < 0.0f)
+			{
+				camera.rotation.y += 360.0f;
+			}
+
+			if(camera.rotation.x > 89.0f)
+			{
+				camera.rotation.x = 89.0f;
+			}
+			if(camera.rotation.x < -89.0f)
+			{
+				camera.rotation.x = -89.0f;
+			}
+
+			// CAMERA MOVEMENT
+			float camera_move_speed = default_camera_move_speed;
+			if(input_manager.key_held(key_code_lshift))
+			{
+				camera_move_speed = 1.5f;
+			}
+			else if(input_manager.key_held(key_code_lmenu))
+			{
+				camera_move_speed = 0.01f;
+			}
+
+			vector3f vel = {};
+			if(!(input_manager.key_held(key_code_e) && input_manager.key_held(key_code_q)))
+			{
+				if(input_manager.key_held(key_code_e))
+				{
+					vel += camera.up;
+				}
+				else if(input_manager.key_held(key_code_q))
+				{
+					vel -= camera.up;
+				}
+			}
+
+			if(!(input_manager.key_held(key_code_d) && input_manager.key_held(key_code_a)))
+			{
+				if(input_manager.key_held(key_code_d))
+				{
+					vel += camera.right;
+				}
+				else if(input_manager.key_held(key_code_a))
+				{
+					vel -= camera.right;
+				}
+			}
+
+			if(!(input_manager.key_held(key_code_s) && input_manager.key_held(key_code_w)))
+			{
+				if(input_manager.key_held(key_code_s))
+				{
+					vel -= camera.front;
+				}
+				else if(input_manager.key_held(key_code_w))
+				{
+					vel += camera.front;
+				}
+			}
+
+			vel = sqrt_magnitude(vel);
+			vel *= camera_move_speed;
+
+			camera.position += vel;
+		}
+
+		view_matrix = camera.get_view_matrix();
+	}
+} player;
 
 // TODO: ui editor (edit noise, weather, water level etc....)
+// TODO: Generate noise on gpu and stream back to cpu for collision data(maybe it might be good)
+// TODO: Move lod and vertices to gpu by using tesselation (CDLOD i.e. https://aggrobird.com/files/cdlod_latest.pdf or Geometry clipmaps)
+
+constexpr size_t chunk_size = 50;
+constexpr int max_chunk_subdivisions = 10;
+
+constexpr int chunk_range = 5;
+
+constexpr int terrain_seed = 1235;
 
 struct terrain_t
 {
@@ -1153,69 +1258,99 @@ struct terrain_t
 	// TODO: Add chunks
 	// TODO: Biomes
 	// TODO: Water falls, ponds, streams and other water types.
+	// TODO: Shadow mapping
+	// TODO: Smooth normals
+
+	struct chunk_data_t
+	{
+		std::vector<vector3f> vertices;
+		std::vector<vector3f> normals;
+		std::vector<vector2f> uvs;
+		std::vector<unsigned int> indices;
+		ID3D11Buffer* pVerticesBuffer, *pNormalsBuffer, *pUvsBuffer;
+		ID3D11Buffer* pIBuffer;
+		vector2i pos;
+
+		void shutdown()
+		{
+			pVerticesBuffer->Release();
+			pNormalsBuffer->Release();
+			pUvsBuffer->Release();
+			pIBuffer->Release();
+		}
+	};
+
+#if 1
+	using chunk_key = std::pair<int,int>;
+	struct chunk_key_hash
+	{
+		std::size_t operator()(const chunk_key& key) const
+		{
+			auto&[x,y] = key;
+			auto hash1 = std::hash<int>{}(x);
+			auto hash2 = std::hash<int>{}(x);
+			return hash1 ^ hash2;
+		}
+	};
+
+	std::unordered_map<chunk_key, chunk_data_t, chunk_key_hash> chunk_map;
+#else
+	std::vector<chunk_data_t> chunks;
+#endif
 
 	std::shared_ptr<texture_t> top_texture;
 	std::shared_ptr<texture_t> right_texture;
 	std::shared_ptr<texture_t> front_texture;
-
-	std::vector<vector3f> vertices;
-	std::vector<vector3f> normals;
-	std::vector<vector2f> uvs;
-	std::vector<unsigned int> indices;
-
-	ID3D11Buffer* pVerticesBuffer, *pNormalsBuffer, *pUvsBuffer;
-	ID3D11Buffer* pIBuffer;
 
 	ID3D11VertexShader* pVs;
 	ID3D11PixelShader* pPs;
 	ID3D11InputLayout* pLayout;
 	ID3D11Buffer* pConstantBuffer;
 
-	std::unique_ptr<std::array<float, grid_array_size*grid_array_size>> grid;
-
 	terrain_t()
+		: top_texture(asset_manager.load_texture_from_file("../data/terrain/grass.jpg")),
+		  right_texture(asset_manager.load_texture_from_file("../data/terrain/rock1.jpg")),
+		  front_texture(asset_manager.load_texture_from_file("../data/terrain/rock2.jpg"))
 	{
-		grid = std::make_unique<std::array<float, grid_array_size*grid_array_size>>();
-
-		top_texture = asset_manager.load_texture_from_file("../data/terrain/grass.jpg");
-		right_texture = asset_manager.load_texture_from_file("../data/terrain/rock1.jpg");
-		front_texture = asset_manager.load_texture_from_file("../data/terrain/rock2.jpg");
-
-		gen_terrain();
-		gen_mesh();
+		setup_shaders();
 	}
 
-	// TODO: Shadow mapping
-	// TODO: Smooth normals
-	~terrain_t()
+	~terrain_t() = default;
+
+#if 0
+	void get_noise_height(vector2i pos)
 	{
-		vertices.clear();
-		normals.clear();
-		uvs.clear();
-		indices.clear();
-
-		pVerticesBuffer->Release();
-		pNormalsBuffer->Release();
-		pUvsBuffer->Release();
-
-		pIBuffer->Release();
-
-		pVs->Release();
-		pPs->Release();
-		pLayout->Release();
-		pConstantBuffer->Release();
+		FastNoiseLite noise1 = {};
+		FastNoiseLite noise2 = {};
+		FastNoiseLite noise3 = {};
 	}
-	
-	void gen_terrain()
+#endif
+
+	chunk_data_t generate_new_chunk(vector2i pos_)
 	{
+		chunk_data_t chunk = {};
+
+		auto&[vertices, normals, uvs, indices,
+			  pVerticesBuffer, pNormalsBuffer, pUvsBuffer, pIBuffer,
+			  pos] = chunk;
+
+		pos = pos_;
+
+		//
+		// Noise
+		//
+
+		//std::unique_ptr<std::array<float, (chunk_size+1)*(chunk_size+1)>> grid;
+		auto grid = std::make_shared<std::array<float, (chunk_size+1)*(chunk_size+1)>>();
+
 		grid->fill(0);
-		static constexpr float noise_scale = 50.0f;
 
-		int seed = static_cast<int>(time(NULL));
+		auto chunk_pos = pos * chunk_size;
+
 #if 1
 		{
 			FastNoiseLite noise;
-			noise.SetSeed(seed);//125);
+			noise.SetSeed(terrain_seed);//125);
 
 			noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
 			noise.SetFrequency(0.002f);
@@ -1228,8 +1363,8 @@ struct terrain_t
 
 			for(unsigned int i = 0; i < grid->size(); i++)
 			{
-				int x = i % grid_array_size;
-				int y = i / grid_array_size;
+				int x = (i % chunk_size) + pos.x;
+				int y = (i / chunk_size) + pos.y;
 
 				(*grid.get())[i] += noise.GetNoise((float)x, (float)y) * 100;
 			}
@@ -1238,7 +1373,7 @@ struct terrain_t
 #if 1
 		{
 			FastNoiseLite noise;
-			noise.SetSeed(seed + 10);
+			noise.SetSeed(terrain_seed + 10);
 
 			noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
 			noise.SetFrequency(0.01f);
@@ -1250,17 +1385,17 @@ struct terrain_t
 
 			for(unsigned int i = 0; i < grid->size(); i++)
 			{
-				int x = i % grid_array_size;
-				int y = i / grid_array_size;
+				int x = (i % chunk_size) + pos.x;
+				int y = (i / chunk_size) + pos.y;
 
-				(*grid.get())[i] += noise.GetNoise((float)x, (float)y) * noise_scale;
+				(*grid.get())[i] += noise.GetNoise((float)x, (float)y) * 50;
 			}
 		}
 #endif
 #if 1
 		{
 			FastNoiseLite noise;
-			noise.SetSeed(seed + 20);//50);
+			noise.SetSeed(terrain_seed + 20);//50);
 
 			noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
 			noise.SetFrequency(0.05f);
@@ -1272,48 +1407,54 @@ struct terrain_t
 
 			for(unsigned int i = 0; i < grid->size(); i++)
 			{
-				int x = i % grid_array_size;
-				int y = i / grid_array_size;
+				int x = (i % chunk_size) + pos.x;
+				int y = (i / chunk_size) + pos.y;
 
 				(*grid.get())[i] += noise.GetNoise((float)x, (float)y) * 2;
 			}
 		}
 #endif
-#if 1
-		{
-			// apply small amount of random noise on top of first noise
-			auto gen = std::bind(std::uniform_real_distribution<>(0,0.5f),std::default_random_engine((unsigned int)std::chrono::system_clock::now().time_since_epoch().count()));
 
-			for(auto&& cell : *grid.get())
-			{
-				cell += static_cast<float>(gen());
-			}
-		}
-#endif
-	}
+		//
+		// Setup mesh
+		//
 
-	void gen_mesh()
-	{
 		vertices.clear();
 		indices.clear();
 		uvs.clear();
 
 		// TODO: Fix height at end of array
-		for(int x = 0; x < grid_array_size; x++)
+		for(int x = 0; x < chunk_size; x++)
 		{
-			for(int z = 0; z < grid_array_size; z++)
+			for(int z = 0; z < chunk_size; z++)
 			{
-				auto grid_pos = vector3f(x,grid.get()->at(grid_array_size * z + x),z);
+				auto grid_pos = vector3f(x,grid.get()->at(chunk_size * z + x),z);
+				auto pos_offset = vector3f(pos.x, 0, pos.y);
+
 				int index_offset = (int)vertices.size();
+
+#if 1
+				// TODO: Fix height at end of array
 				// FIRST TRIANGLE
-				vertices.push_back(vector3f(0,0,0) + vector3f(x,grid.get()->at(grid_array_size * z + x),z));
-				vertices.push_back(vector3f(1,0,0) + vector3f(x,grid.get()->at((x < grid_array_size-1) ? grid_array_size * z + (x+1) : grid_array_size * z + x),z));
-				vertices.push_back(vector3f(0,0,1) + vector3f(x,grid.get()->at((z < grid_array_size-1) ? grid_array_size * (z+1) + x : grid_array_size * z + x),z));
+				vertices.push_back(vector3f(0,0,0) + pos_offset + vector3f(x,grid.get()->at(chunk_size * z + x),z));
+				vertices.push_back(vector3f(1,0,0) + pos_offset + vector3f(x,grid.get()->at((x < chunk_size-1) ? chunk_size * z + (x+1) : chunk_size * z + x),z));
+				vertices.push_back(vector3f(0,0,1) + pos_offset + vector3f(x,grid.get()->at((z < chunk_size-1) ? chunk_size * (z+1) + x : chunk_size * z + x),z));
 
 				// SECOND TRIANGLE
-				vertices.push_back(vector3f(1,0,0) + vector3f(x,grid.get()->at((x < grid_array_size-1) ? grid_array_size * z + (x+1) : grid_array_size * z + x),z));
-				vertices.push_back(vector3f(0,0,1) + vector3f(x,grid.get()->at((z < grid_array_size-1) ? grid_array_size * (z+1) + x : grid_array_size * z + x),z));
-				vertices.push_back(vector3f(1,0,1) + vector3f(x,grid.get()->at((x < grid_array_size-1 && z < grid_array_size-1) ? grid_array_size * (z+1) + (x+1) : grid_array_size * z + x),z));
+				vertices.push_back(vector3f(1,0,0) + pos_offset + vector3f(x,grid.get()->at((x < chunk_size-1) ? chunk_size * z + (x+1) : chunk_size * z + x),z));
+				vertices.push_back(vector3f(0,0,1) + pos_offset + vector3f(x,grid.get()->at((z < chunk_size-1) ? chunk_size * (z+1) + x : chunk_size * z + x),z));
+				vertices.push_back(vector3f(1,0,1) + pos_offset + vector3f(x,grid.get()->at((x < chunk_size-1 && z < chunk_size-1) ? chunk_size * (z+1) + (x+1) : chunk_size * z + x),z));
+#else
+				// FIRST TRIANGLE
+				vertices.push_back(vector3f(0,0,0) + pos_offset + vector3f(x,grid.get()->at(chunk_size * z + x),z));
+				vertices.push_back(vector3f(1,0,0) + pos_offset + vector3f(x,grid.get()->at(chunk_size * z + (x+1)),z));
+				vertices.push_back(vector3f(0,0,1) + pos_offset + vector3f(x,grid.get()->at(chunk_size * (z+1) + x),1));
+
+				// SECOND TRIANGLE
+				vertices.push_back(vector3f(1,0,0) + pos_offset + vector3f(x,grid.get()->at(chunk_size * z + (x+1)),z));
+				vertices.push_back(vector3f(0,0,1) + pos_offset + vector3f(x,grid.get()->at(chunk_size * (z+1) + x),z));
+				vertices.push_back(vector3f(1,0,1) + pos_offset + vector3f(x,grid.get()->at(chunk_size * (z+1) + (x+1)),z));
+#endif
 				
 				uvs.push_back({0,0});
 				uvs.push_back({1,0});
@@ -1349,14 +1490,9 @@ struct terrain_t
 			}
 		}
 
-		setup_buffers();
-		setup_shaders();
-	}
-
-	void setup_buffers()
-	{
+		// Buffers
 		{
-			assert(!vertices.empty());
+			assert(!chunk.vertices.empty());
 
 			D3D11_BUFFER_DESC vertex_buffer_desc = {};
 			vertex_buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
@@ -1423,6 +1559,8 @@ struct terrain_t
 
 		assert(SUCCEEDED(hr));
 		assert(pIBuffer != NULL);
+
+		return chunk;
 	}
 
 	void setup_shaders()
@@ -1490,6 +1628,63 @@ struct terrain_t
 		assert(pLayout != NULL);
 	}
 
+	void shutdown()
+	{
+		top_texture.reset();
+		right_texture.reset();
+		front_texture.reset();
+
+		pVs->Release();
+		pPs->Release();
+		pLayout->Release();
+		pConstantBuffer->Release();
+
+		chunk_map.clear();
+	}
+
+	std::vector<std::pair<int,int>> viewed_chunks;
+
+	void update()
+	{
+		// TODO: Multithreaded chunk creation
+		viewed_chunks.clear();
+		for(int i = -chunk_range; i <= chunk_range; i++)
+		{
+			for(int j = -chunk_range; j <= chunk_range; j++)
+			{
+				vector2i p = { i + std::roundf(player.camera.position.x / chunk_size), j + std::roundf(player.camera.position.z / chunk_size)};
+
+				if(chunk_map.contains({p.x,p.y}))
+				{
+				}
+				else
+				{
+					chunk_map.insert({ {p.x,p.y},generate_new_chunk({p.x*chunk_size,p.y*chunk_size}) });
+				}
+
+				viewed_chunks.push_back({p.x,p.y});
+			}
+		}
+
+		for(const auto&[pos, chunk] : chunk_map)
+		{
+			bool viewed = false;
+			for(const auto& viewed_pos : viewed_chunks)
+			{
+				if(pos == viewed_pos)
+				{
+					viewed = true;
+				}
+			}
+
+			if(!viewed)
+			{
+				chunk_map.at(pos).shutdown();
+				chunk_map.erase(chunk_map.find(pos));
+			}
+		}
+	}
+
 	void draw()
 	{
 		{
@@ -1514,32 +1709,24 @@ struct terrain_t
 		devcon->PSSetShader(pPs, 0, 0);
 		devcon->IASetInputLayout(pLayout);
 
-#if 0
-		devcon->PSSetShaderResources(0, 1, &top_texture->pTexture);
-		devcon->PSSetSamplers(0, 1, &top_texture->pSampleState);
-
-		devcon->PSSetShaderResources(1, 1, &right_texture->pTexture);
-		devcon->PSSetSamplers(1, 1, &right_texture->pSampleState);
-
-		devcon->PSSetShaderResources(2, 1, &front_texture->pTexture);
-		devcon->PSSetSamplers(2, 1, &front_texture->pSampleState);
-#else
 		top_texture->set(0);
 		right_texture->set(1);
 		front_texture->set(2);
-#endif
 
-		devcon->IASetIndexBuffer(pIBuffer, DXGI_FORMAT_R32_UINT, 0);
+		for(const auto&[pos, chunk] : chunk_map)
+		{
+			devcon->IASetIndexBuffer(chunk.pIBuffer, DXGI_FORMAT_R32_UINT, 0);
 
-		ID3D11Buffer* buffers[] = { pVerticesBuffer, pNormalsBuffer, pUvsBuffer };
-		unsigned int stride[] = { sizeof(vector3f), sizeof(vector3f), sizeof(vector2f) };
-		unsigned int offset[] = { 0,0,0 };
+			ID3D11Buffer* buffers[] = { chunk.pVerticesBuffer, chunk.pNormalsBuffer, chunk.pUvsBuffer };
+			unsigned int stride[] = { sizeof(vector3f), sizeof(vector3f), sizeof(vector2f) };
+			unsigned int offset[] = { 0,0,0 };
 
-		devcon->IASetVertexBuffers(0, 3, buffers, stride, offset);
+			devcon->IASetVertexBuffers(0, 3, buffers, stride, offset);
 
-		devcon->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			devcon->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-		devcon->DrawIndexed((UINT)indices.size(), 0, 0);
+			devcon->DrawIndexed((UINT)chunk.indices.size(), 0, 0);
+		}
 	}
 };
 
@@ -2399,10 +2586,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 	terrain_t terrain;
 
-	auto gen = std::bind(std::uniform_real_distribution<>(-30,10),std::default_random_engine((unsigned int)std::chrono::system_clock::now().time_since_epoch().count()));
-	water_t water(grid_array_size, static_cast<float>(gen()));
-
-	camera_t camera;
+	water_t water = water_t(chunk_size*2, 0);
 
 	MSG msg = {};
 
@@ -2425,97 +2609,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 		else
 		{
 			// Update
-			if(input_manager.mouse_button_held(mouse_button_right))
-			{
-				constexpr float default_camera_rotate_speed = 0.5f;
-				constexpr float default_camera_move_speed = 0.1f;
-
-				// CAMERA ROTATION
-				vector2i mouse_delta = input_manager.get_mouse_delta();
-				vector3f camera_rotation = vector3f(mouse_delta.y, -mouse_delta.x, 0);
-				camera_rotation *= default_camera_rotate_speed;
-				camera.rotation += camera_rotation;
-
-				if(camera.rotation.y > 360.0f)
-				{
-					camera.rotation.y -= 360.0f;
-				}
-				if(camera.rotation.y < 0.0f)
-				{
-					camera.rotation.y += 360.0f;
-				}
-
-				if(camera.rotation.x > 89.0f)
-				{
-					camera.rotation.x = 89.0f;
-				}
-				if(camera.rotation.x < -89.0f)
-				{
-					camera.rotation.x = -89.0f;
-				}
-
-				// CAMERA MOVEMENT
-				float camera_move_speed = default_camera_move_speed;
-				if(input_manager.key_held(key_code_lshift))
-				{
-					camera_move_speed = 1.5f;
-				}
-				else if(input_manager.key_held(key_code_lmenu))
-				{
-					camera_move_speed = 0.01f;
-				}
-
-				vector3f vel = {};
-				if(!(input_manager.key_held(key_code_e) && input_manager.key_held(key_code_q)))
-				{
-					if(input_manager.key_held(key_code_e))
-					{
-						vel += camera.up;
-					}
-					else if(input_manager.key_held(key_code_q))
-					{
-						vel -= camera.up;
-					}
-				}
-
-				if(!(input_manager.key_held(key_code_d) && input_manager.key_held(key_code_a)))
-				{
-					if(input_manager.key_held(key_code_d))
-					{
-						vel += camera.right;
-					}
-					else if(input_manager.key_held(key_code_a))
-					{
-						vel -= camera.right;
-					}
-				}
-
-				if(!(input_manager.key_held(key_code_s) && input_manager.key_held(key_code_w)))
-				{
-					if(input_manager.key_held(key_code_s))
-					{
-						vel -= camera.front;
-					}
-					else if(input_manager.key_held(key_code_w))
-					{
-						vel += camera.front;
-					}
-				}
-
-				vel = sqrt_magnitude(vel);
-				vel *= camera_move_speed;
-
-				camera.position += vel;
-			}
+			player.update();
+			terrain.update();
 
 			// Render
-			view_matrix = camera.get_view_matrix();
-
 			float color[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 			devcon->ClearRenderTargetView(backbuffer, color);
 			devcon->ClearDepthStencilView(depthbuffer, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
 
 			terrain.draw();
+
 			water.draw();
 
 			sky.draw();
@@ -2530,6 +2633,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 		}
 	}
 
+	terrain.shutdown();
 	asset_manager.shutdown();
 
 	swapchain->SetFullscreenState(FALSE, NULL);

@@ -3,10 +3,9 @@
 
 namespace math
 {
-#if 0
-	struct matrix4
+	template<typename T>
+	struct matrix<4,4,T>
 	{
 
 	};
-#endif
 }
