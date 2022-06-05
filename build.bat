@@ -1,6 +1,7 @@
 @echo off
 if not defined DevEnvDir (
-	call "E:\Microsoft Visual Studio\2019\VC\Auxiliary\Build\vcvarsall.bat" x64
+	:: call "E:\Microsoft Visual Studio\2019\VC\Auxiliary\Build\vcvarsall.bat" x64
+	call vcvarsall.bat x64
 )
 
 set compiler_flags=/std:c++20 /W3 /Zi /FC /nologo /Od /Oi /WX /EHsc /Fo.\obj\ /Fd.\obj\ /Feprogram
