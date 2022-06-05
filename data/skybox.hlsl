@@ -53,8 +53,6 @@ PS_OUTPUT PSMain(PS_INPUT input) : SV_TARGET
 
 	float4 color = cubemap_texture.Sample(sampler_type, input.texcoord);
 
-	//color = float4(1.0, 0.4, 0.1, 0.0);
-
 	output.color = color;
 
 	return output;

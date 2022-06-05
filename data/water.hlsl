@@ -1,3 +1,19 @@
+// ---------
+// CONSTANTS
+// ---------
+
+cbuffer CONSTANT_BUFFER : register(b0)
+{
+	float4x4 view_and_projection;
+	float water_level;
+	float time;
+};
+
+float2 random2(float2 p)
+{
+	return frac(sin(float2(dot(p,float2(127.1,311.7)),dot(p,float2(269.5,183.3))))*43758.5453);
+}
+
 // -------------
 // VERTEX SHADER
 // -------------
@@ -17,16 +33,12 @@ struct VS_OUTPUT
 	float2 texcoord: TEXCOORD0;
 };
 
-cbuffer VS_CONSTANT_BUFFER : register(b0)
-{
-	float4x4 view_and_projection;
-};
-
 VS_OUTPUT VSMain(VS_INPUT input)
 {
 	VS_OUTPUT output;
 
-	output.position = mul(view_and_projection, float4(input.position, 1.0));
+	float4 v = float4(input.position + float3(0,water_level,0), 1);
+	output.position = mul(view_and_projection, v);
 	output.vertex_position = input.position;
 	output.normal = input.normal;
 	output.texcoord = input.texcoord;
@@ -37,8 +49,6 @@ VS_OUTPUT VSMain(VS_INPUT input)
 // ------------
 // PIXEL SHADER
 // ------------
-Texture2D shader_texture;
-SamplerState sampler_type;
 
 struct PS_INPUT
 {
@@ -57,10 +67,48 @@ PS_OUTPUT PSMain(PS_INPUT input) : SV_TARGET
 {
 	PS_OUTPUT output;
 
-	float4 color = shader_texture.Sample(sampler_type, input.texcoord);
-	color = float4(0, 0.2, 0.4, 1);
+#if 0
+	float4 color = rand(input.texcoord);
+	color *= float4(0, 0.2, 0.4, 0.1);
 
 	output.color = color;
+#endif
+
+	float3 color = 0;
+
+#if 0
+	float2 tc = input.texcoord * 200;
+	float2 i_st = floor(tc);
+	float2 f_st = frac(tc);
+
+	float m_dist = 1;
+
+	for(int y = -1; y <= 1; y++)
+	{
+		for(int x = -1; x <= 1; x++)
+		{
+			float2 neighbor = float2(float(x),float(y));
+
+			// FIX: this is broken somehow.
+			float2 p = random2(neighbor + i_st);
+			p = 0.5 + 0.5 * sin(time + 6.2831*p);
+
+			float2 diff = neighbor + p - f_st;
+
+			float dist = length(diff);
+			m_dist = min(m_dist, dist);
+		}
+	}
+
+	color += m_dist;
+
+	//color += 1-step(.02,m_dist);
+	//color.r += step(.98, f_st.x) + step(.98, f_st.y);
+#else
+	color = float3(0, .3, .7);
+#endif
+
+	output.color = float4(color,0.5);
 
 	return output;
 }

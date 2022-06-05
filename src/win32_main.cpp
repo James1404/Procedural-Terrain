@@ -8,7 +8,10 @@
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 
-#include "math/math.h"
+#include <glm.hpp>
+#include <mat4x4.hpp>
+#include <gtc/matrix_transform.hpp>
+#include <gtc/type_ptr.hpp>
 
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
@@ -31,7 +34,24 @@
 #include <memory>
 #include <iostream>
 #include <algorithm>
+#include <thread>
+#include <cmath>
 
+using vec3f = glm::vec3;
+using vec3d = glm::dvec3;
+using vec3i = glm::ivec3;
+using vec3u = glm::uvec3;
+
+using vec2f = glm::vec2;
+using vec2d = glm::dvec2;
+using vec2i = glm::ivec2;
+using vec2u = glm::uvec2;
+
+using matrix4 = glm::mat4;
+using matrix3 = glm::mat3;
+using matrix2 = glm::mat2;
+
+// FIX: Log function doesnt work because winmain doesnt have a console hook (or whatever its called....??)
 template <typename ...Args>
 inline void log(Args&& ..._args)
 {
@@ -42,8 +62,6 @@ inline void log(Args&& ..._args)
 #define log_info(...) log("", __VA_ARGS__);
 #define log_warning(...) log("'", __FILE__, "' Warning at Line(", __LINE__, "): ", __VA_ARGS__);
 #define log_error(...) log("'", __FILE__, "' Error at Line(", __LINE__, "): ", __VA_ARGS__);
-
-#define USE_RAW_INPUT
 
 constexpr int DEFAULT_SCREEN_WIDTH = 1280; 
 constexpr int DEFAULT_SCREEN_HEIGHT = 720; 
@@ -60,7 +78,7 @@ ID3D11DepthStencilView* depthbuffer;
 constexpr float NEAR_CLIP_PLANE = 0.1f;
 constexpr float FAR_CLIP_PLANE = 1000.0f;
 
-constexpr vector3f WORLD_UP = vector3f(0, 1, 0);
+constexpr vec3f WORLD_UP = vec3f(0, 1, 0);
 
 constexpr float CAMERA_MOVE_SPEED_NORMAL = 3.0f;
 constexpr float CAMERA_MOVE_SPEED_SLOW = 0.5f;
@@ -70,7 +88,18 @@ constexpr float CAMERA_ROTATION_SPEED = 0.05f;
 
 matrix4 projection_matrix, view_matrix;
 
-inline vector3f sqrt_magnitude(vector3f vec)
+#define USE_RAW_INPUT
+
+static float water_level = -50;
+
+constexpr size_t chunk_size = 500;
+constexpr int max_chunk_subdivisions = 10;
+
+constexpr LPCWSTR water_shader_path = L"../data/water.hlsl";
+constexpr LPCWSTR terrain_shader_path = L"../data/terrain.hlsl";
+constexpr LPCWSTR skybox_shader_path = L"../data/skybox.hlsl";
+
+inline vec3f sqrt_magnitude(vec3f vec)
 {
 	float length = sqrt((vec.x * vec.x) + (vec.y * vec.y) + (vec.z * vec.z));
 	if (length != 0)
@@ -81,41 +110,75 @@ inline vector3f sqrt_magnitude(vector3f vec)
 	return vec;
 }
 
-inline vector3f move_towards(const vector3f pos, const vector3f target, const float step)
+inline vec3f move_towards(const vec3f pos, const vec3f target, const float step)
 {
-	const vector3f delta = target - pos;
-	const float len2 = math::dot(delta, delta);
+	const vec3f delta = target - pos;
+	const float len2 = glm::dot(delta, delta);
 
 	if (len2 < step * step)
 	{
 		return target;
 	}
 
-	const vector3f direction = delta / math::basic::sqrt(len2);
+	const vec3f direction = delta / sqrt(len2);
 
 	return pos + step * direction;
 }
 
+struct program_timer_t
+{
+	using hr_clock = std::chrono::high_resolution_clock;
+	using hr_time_point = hr_clock::time_point;
+	using duration = std::chrono::duration<float>;
+	using milliseconds = std::chrono::milliseconds;
+
+	bool started = false;
+
+	hr_time_point prog_start;
+	
+	void reset()
+	{
+		started = false;
+	}
+
+	void start()
+	{
+		prog_start = hr_clock::now();
+
+		started = true;
+	}
+
+	auto get_time()
+	{
+		assert(started && "Cannot get_time without calling \"start\"");
+
+		duration d = hr_clock::now() - prog_start;
+		return d.count();
+	}
+};
+
+static program_timer_t program_clock;
+
 struct transform_t
 {
-	vector3f position, rotation, scale;
+	vec3f position, rotation, scale;
 
 	transform_t()
-		: position(vector3f(0)), rotation(vector3f(0)), scale(vector3f(1)) {}
+		: position(vec3f(0)), rotation(vec3f(0)), scale(vec3f(1)) {}
 
-	transform_t(vector3f position, vector3f rotation, vector3f scale)
+	transform_t(vec3f position, vec3f rotation, vec3f scale)
 		: position(position), rotation(rotation), scale(scale) {}
 
 	matrix4 get_matrix()
 	{
 		matrix4 model = matrix4(1.0f);
-		model = glm::translate(model, vector3_to_glm_vec3(position));
+		model = glm::translate(model, position);
 
 		model = glm::rotate(model, glm::radians(rotation.x), glm::vec3(1, 0, 0));
 		model = glm::rotate(model, glm::radians(rotation.y), glm::vec3(0, 1, 0));
 		model = glm::rotate(model, glm::radians(rotation.z), glm::vec3(0, 0, 1));
 
-		model = glm::scale(model, vector3_to_glm_vec3(scale));
+		model = glm::scale(model, scale);
 
 		return model;
 	}
@@ -302,9 +365,9 @@ struct texture_t
 
 struct vertex_t
 {
-	vector3f position;
-	vector3f normal;
-	vector2f tex_coords;
+	vec3f position;
+	vec3f normal;
+	vec2f tex_coords;
 };
 
 struct model_t
@@ -330,27 +393,27 @@ struct model_t
 		{
 			vertex_t vertex;
 
-			vector3f vector;
-			vector.x = mesh->mVertices[i].x;
-			vector.y = mesh->mVertices[i].y;
-			vector.z = mesh->mVertices[i].z;
-			vertex.position = vector;
+			vec3f v;
+			v.x = mesh->mVertices[i].x;
+			v.y = mesh->mVertices[i].y;
+			v.z = mesh->mVertices[i].z;
+			vertex.position = v;
 
-			vector.x = mesh->mNormals[i].x;
-			vector.y = mesh->mNormals[i].y;
-			vector.z = mesh->mNormals[i].z;
-			vertex.normal = vector;
+			v.x = mesh->mNormals[i].x;
+			v.y = mesh->mNormals[i].y;
+			v.z = mesh->mNormals[i].z;
+			vertex.normal = v;
 
 			if (mesh->mTextureCoords[0])
 			{
-				vector2f vec;
+				vec2f vec;
 				vec.x = mesh->mTextureCoords[0][i].x;
 				vec.y = mesh->mTextureCoords[0][i].y;
 				vertex.tex_coords = vec;
 			}
 			else
 			{
-				vertex.tex_coords = vector2f(0);
+				vertex.tex_coords = vec2f(0);
 			}
 
 			vertices.push_back(vertex);
@@ -520,9 +583,9 @@ asset_manager_t asset_manager;
 
 struct camera_t
 {
-	vector3f position, rotation;
+	vec3f position, rotation;
 
-	vector3f front, right, up;
+	vec3f front, right, up;
 
 	matrix4 get_view_matrix()
 	{
@@ -530,11 +593,11 @@ struct camera_t
 		front.y = sin(glm::radians(rotation.x));
 		front.z = sin(glm::radians(rotation.y)) * cos(glm::radians(rotation.x));
 
-		front = math::normalize(front);
-		right = math::normalize(math::cross(front, WORLD_UP));
-		up = math::normalize(math::cross(right, front));
+		front = glm::normalize(front);
+		right = glm::normalize(glm::cross(front, WORLD_UP));
+		up = glm::normalize(glm::cross(right, front));
 
-		return glm::lookAt(vector3_to_glm_vec3(position), vector3_to_glm_vec3(position) + vector3_to_glm_vec3(front), vector3_to_glm_vec3(up));
+		return glm::lookAt(position, position + front, up);
 	}
 
 	camera_t()
@@ -806,8 +869,8 @@ struct input_manager_t
 {
 	bool keyboard_state[256], prev_keyboard_state[256];
 	bool mouse_state[5], prev_mouse_state[5];
-	vector2i mouse_pos = {}, prev_mouse_pos = {};
-	vector2i mouse_delta = {};
+	vec2i mouse_pos = {}, prev_mouse_pos = {};
+	vec2i mouse_delta = {};
 
 	void set_key(key_code key, bool state)
 	{
@@ -821,7 +884,7 @@ struct input_manager_t
 		mouse_state[button] = state;
 	}
 
-	void set_mouse_pos(vector2i pos)
+	void set_mouse_pos(vec2i pos)
 	{
 		prev_mouse_pos = mouse_pos;
 		mouse_pos = pos;
@@ -858,17 +921,17 @@ struct input_manager_t
 		return !mouse_state[button] && prev_mouse_state[button];
 	}
 
-	const vector2i get_mouse_pos()
+	const vec2i get_mouse_pos()
 	{
 		return mouse_pos;
 	}
 
-	const vector2i get_previous_mouse_pos()
+	const vec2i get_previous_mouse_pos()
 	{
 		return prev_mouse_pos;
 	}
 
-	const vector2i get_mouse_delta()
+	const vec2i get_mouse_delta()
 	{
 #if 1
 		return mouse_delta;
@@ -882,10 +945,9 @@ input_manager_t input_manager;
 
 struct water_t
 {
-	std::shared_ptr<texture_t> texture;
-	std::vector<vector3f> vertices;
-	std::vector<vector3f> normals;
-	std::vector<vector2f> uvs;
+	std::vector<vec3f> vertices;
+	std::vector<vec3f> normals;
+	std::vector<vec2f> uvs;
 	std::vector<unsigned int> indices;
 
 	ID3D11Buffer* pVerticesBuffer, *pNormalsBuffer, *pUvsBuffer;
@@ -896,13 +958,8 @@ struct water_t
 	ID3D11InputLayout* pLayout;
 	ID3D11Buffer* pConstantBuffer;
 
-	int water_size = 50;
-	float water_height = 0;
-
-	// TODO: Have water follow camera at all times, but still update as if it is moving(you get it....)
 	// TODO: Infinite water
 	// TODO: Environment mapping for water
-	// TODO: Water Alpha
 	// TODO: Water ripples.
 	// TODO: Water reflections. (maybe screen space reflections????)
 	// TODO: Water foam at edges.
@@ -910,18 +967,18 @@ struct water_t
 	// TODO: Water specularity.
 	// TODO: Water caustics
 	// TODO: Water post proccessing effect
+	// TODO: Water Teselation (probably)
 
-	water_t(int size, float height)
-		: water_size(size), water_height(height)
+	water_t()
 	{
 		vertices.clear();
 		indices.clear();
 		uvs.clear();
 
-		vertices.push_back({ 0,water_height,0 });
-		vertices.push_back({ water_size,water_height,0 });
-		vertices.push_back({ 0,water_height,water_size });
-		vertices.push_back({ water_size,water_height,water_size });
+		vertices.push_back({ 0,0,0 });
+		vertices.push_back({ chunk_size,0,0 });
+		vertices.push_back({ 0,0,chunk_size });
+		vertices.push_back({ chunk_size,0,chunk_size });
 
 		indices.push_back(0);
 		indices.push_back(2);
@@ -943,8 +1000,6 @@ struct water_t
 
 		setup_buffers();
 		setup_shaders();
-
-		texture = asset_manager.load_texture_from_file("../data/diffuse.jpg");
 	}
 
 	~water_t()
@@ -966,6 +1021,15 @@ struct water_t
 		pConstantBuffer->Release();
 	}
 
+	// FIX: I dont know if this is good or not, but it works?
+	__declspec(align(16))
+	struct CONSTANT_BUFFER
+	{
+		matrix4 view_and_projection;
+		float water_level;
+		float time;
+	};
+
 	void setup_buffers()
 	{
 		{
@@ -973,7 +1037,7 @@ struct water_t
 
 			D3D11_BUFFER_DESC vertex_buffer_desc = {};
 			vertex_buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
-			vertex_buffer_desc.ByteWidth = (UINT)(sizeof(vector3f) * vertices.size());
+			vertex_buffer_desc.ByteWidth = (UINT)(sizeof(vec3f) * vertices.size());
 			vertex_buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 			vertex_buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
@@ -991,7 +1055,7 @@ struct water_t
 
 			D3D11_BUFFER_DESC normal_buffer_desc = {};
 			normal_buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
-			normal_buffer_desc.ByteWidth = (UINT)(sizeof(vector3f) * normals.size());
+			normal_buffer_desc.ByteWidth = (UINT)(sizeof(vec3f) * normals.size());
 			normal_buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 			normal_buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
@@ -1009,7 +1073,7 @@ struct water_t
 
 			D3D11_BUFFER_DESC uvs_buffer_desc = {};
 			uvs_buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
-			uvs_buffer_desc.ByteWidth = (UINT)(sizeof(vector2f) * uvs.size());
+			uvs_buffer_desc.ByteWidth = (UINT)(sizeof(vec2f) * uvs.size());
 			uvs_buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 			uvs_buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
@@ -1044,17 +1108,15 @@ struct water_t
 		ID3DBlob* ps;
 		ID3DBlob* errorBlob;
 
-		static constexpr LPCWSTR grid_shader_path = L"../data/water.hlsl";
-
 		UINT flags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_DEBUG;
 
 		{
-			HRESULT hr = D3DCompileFromFile(grid_shader_path, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain", "vs_4_0", flags, 0, &vs, &errorBlob);
+			HRESULT hr = D3DCompileFromFile(water_shader_path, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain", "vs_4_0", flags, 0, &vs, &errorBlob);
 			assert(SUCCEEDED(hr) && "Vertex Shader failed to compile");
 		}
 
 		{
-			HRESULT hr = D3DCompileFromFile(grid_shader_path, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSMain", "ps_4_0", flags, 0, &ps, &errorBlob);
+			HRESULT hr = D3DCompileFromFile(water_shader_path, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSMain", "ps_4_0", flags, 0, &ps, &errorBlob);
 			assert(SUCCEEDED(hr) && "Pixel Shader failed to compile");
 		}
 
@@ -1080,13 +1142,8 @@ struct water_t
 		devcon->IASetInputLayout(pLayout);
 
 		{
-			struct VS_CONSTANT_BUFFER
-			{
-				matrix4 view_and_projection;
-			};
-
 			D3D11_BUFFER_DESC constant_buffer_desc = {};
-			constant_buffer_desc.ByteWidth = sizeof(VS_CONSTANT_BUFFER);
+			constant_buffer_desc.ByteWidth = sizeof(CONSTANT_BUFFER);
 			constant_buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
 			constant_buffer_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 			constant_buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -1106,20 +1163,18 @@ struct water_t
 	void draw()
 	{
 		{
-			struct VS_CONSTANT_BUFFER
-			{
-				matrix4 view_and_projection;
-			};
-
-			VS_CONSTANT_BUFFER const_buffer = {};
+			CONSTANT_BUFFER const_buffer = {};
 			const_buffer.view_and_projection = projection_matrix * view_matrix;
+			const_buffer.time = program_clock.get_time();
+			const_buffer.water_level = water_level;
 
 			D3D11_MAPPED_SUBRESOURCE ms;
 			devcon->Map(pConstantBuffer, NULL, D3D11_MAP_WRITE_DISCARD, NULL, &ms);
-			memcpy(ms.pData, &const_buffer, sizeof(VS_CONSTANT_BUFFER));
+			memcpy(ms.pData, &const_buffer, sizeof(CONSTANT_BUFFER));
 			devcon->Unmap(pConstantBuffer, NULL);
 
 			devcon->VSSetConstantBuffers(0, 1, &pConstantBuffer);
+			devcon->PSSetConstantBuffers(0, 1, &pConstantBuffer);
 		}
 		
 		// bind shaders and textures
@@ -1127,13 +1182,10 @@ struct water_t
 		devcon->PSSetShader(pPs, 0, 0);
 		devcon->IASetInputLayout(pLayout);
 
-		devcon->PSSetShaderResources(0, 1, &texture->pTexture);
-		devcon->PSSetSamplers(0, 1, &texture->pSampleState);
-
 		devcon->IASetIndexBuffer(pIBuffer, DXGI_FORMAT_R32_UINT, 0);
 
 		ID3D11Buffer* buffers[] = { pVerticesBuffer, pNormalsBuffer, pUvsBuffer };
-		unsigned int stride[] = { sizeof(vector3f), sizeof(vector3f), sizeof(vector2f) };
+		unsigned int stride[] = { sizeof(vec3f), sizeof(vec3f), sizeof(vec2f) };
 		unsigned int offset[] = { 0,0,0 };
 
 		devcon->IASetVertexBuffers(0, 3, buffers, stride, offset);
@@ -1156,8 +1208,8 @@ struct player_t
 			constexpr float default_camera_move_speed = 0.1f;
 
 			// CAMERA ROTATION
-			vector2i mouse_delta = input_manager.get_mouse_delta();
-			vector3f camera_rotation = vector3f(mouse_delta.y, -mouse_delta.x, 0);
+			vec2i mouse_delta = input_manager.get_mouse_delta();
+			vec3f camera_rotation = vec3f(mouse_delta.y, -mouse_delta.x, 0);
 			camera_rotation *= default_camera_rotate_speed;
 			camera.rotation += camera_rotation;
 
@@ -1190,7 +1242,7 @@ struct player_t
 				camera_move_speed = 0.01f;
 			}
 
-			vector3f vel = {};
+			vec3f vel = {};
 			if(!(input_manager.key_held(key_code_e) && input_manager.key_held(key_code_q)))
 			{
 				if(input_manager.key_held(key_code_e))
@@ -1241,35 +1293,43 @@ struct player_t
 // TODO: Generate noise on gpu and stream back to cpu for collision data(maybe it might be good)
 // TODO: Move lod and vertices to gpu by using tesselation (CDLOD i.e. https://aggrobird.com/files/cdlod_latest.pdf or Geometry clipmaps)
 
-constexpr size_t chunk_size = 50;
-constexpr int max_chunk_subdivisions = 10;
+// TODO: Day / night cycle
+// TODO: Light mapping
 
-constexpr int chunk_range = 5;
+// TODO: Houses and villages on flat land.
+// TODO: Paths between houses
 
-constexpr int terrain_seed = 1235;
+// TODO: Use Poisson Disk Sampling for trees and maybe grass.
+// 		 https://www.cs.ubc.ca/~rbridson/docs/bridson-siggraph07-poissondisk.pdf
+
+// NOTE: https://en.wikipedia.org/wiki/Sobel_operator
+// NOTE: https://thebookofshaders.com/13/
+// NOTE: https://docs.microsoft.com/en-us/windows/win32/direct3d11/direct3d-11-advanced-stages-tessellation
 
 struct terrain_t
 {
-	// TODO: Trees, rocks and vegetation
-	// TODO: Weather (e.g. rain, snow, wind(maybe????), cloudy, sunny etc..)
-	// TODO: Day / night cycle
-	// TODO: Grass
-	// TODO: Terrain collisions and physics system.
-	// TODO: Add chunks
-	// TODO: Biomes
-	// TODO: Water falls, ponds, streams and other water types.
+	// TODO: Add snow on high hills.
 	// TODO: Shadow mapping
 	// TODO: Smooth normals
+	// TODO: Lod
+	// TODO: Biomes
+	// TODO: Grass
+	// TODO: Trees, rocks and vegetation
+	// TODO: Weather (e.g. rain, snow, wind(maybe????), cloudy, sunny etc..)
+	// TODO: Terrain collisions and physics system.
+	// TODO: Water falls, ponds, streams and other water types.
+	// TODO: Use normal map textures.
+	// TODO: Add sand texture
 
 	struct chunk_data_t
 	{
-		std::vector<vector3f> vertices;
-		std::vector<vector3f> normals;
-		std::vector<vector2f> uvs;
+		std::vector<vec3f> vertices;
+		std::vector<vec3f> normals;
+		std::vector<vec2f> uvs;
 		std::vector<unsigned int> indices;
 		ID3D11Buffer* pVerticesBuffer, *pNormalsBuffer, *pUvsBuffer;
 		ID3D11Buffer* pIBuffer;
-		vector2i pos;
+		vec2i pos;
 
 		void shutdown()
 		{
@@ -1280,53 +1340,58 @@ struct terrain_t
 		}
 	};
 
-#if 1
-	using chunk_key = std::pair<int,int>;
-	struct chunk_key_hash
-	{
-		std::size_t operator()(const chunk_key& key) const
-		{
-			auto&[x,y] = key;
-			auto hash1 = std::hash<int>{}(x);
-			auto hash2 = std::hash<int>{}(x);
-			return hash1 ^ hash2;
-		}
-	};
+	chunk_data_t chunk;
 
-	std::unordered_map<chunk_key, chunk_data_t, chunk_key_hash> chunk_map;
-#else
-	std::vector<chunk_data_t> chunks;
-#endif
-
-	std::shared_ptr<texture_t> top_texture;
-	std::shared_ptr<texture_t> right_texture;
-	std::shared_ptr<texture_t> front_texture;
+	std::shared_ptr<texture_t> grass_texture;
+	std::shared_ptr<texture_t> cliff_texture;
+	std::shared_ptr<texture_t> sand_texture;
 
 	ID3D11VertexShader* pVs;
 	ID3D11PixelShader* pPs;
 	ID3D11InputLayout* pLayout;
 	ID3D11Buffer* pConstantBuffer;
 
-	terrain_t()
-		: top_texture(asset_manager.load_texture_from_file("../data/terrain/grass.jpg")),
-		  right_texture(asset_manager.load_texture_from_file("../data/terrain/rock1.jpg")),
-		  front_texture(asset_manager.load_texture_from_file("../data/terrain/rock2.jpg"))
+	// FIX: Terrain seed (time_t(NULL)) doesnt seem to work???
+	int terrain_seed;
+
+	__declspec(align(16))
+	struct CONSTANT_BUFFER
 	{
+		matrix4 view_and_projection;
+		float water_level;
+	};
+
+	terrain_t()
+		: grass_texture(asset_manager.load_texture_from_file("../data/terrain/grass.jpg")),
+		  cliff_texture(asset_manager.load_texture_from_file("../data/terrain/rock1.jpg")),
+		  sand_texture(asset_manager.load_texture_from_file("../data/terrain/sand/sand_albedo.png"))
+	{
+		std::random_device device;
+		auto rng = std::mt19937(device());
+		auto dist = std::uniform_int_distribution<std::mt19937::result_type>(1, 100000);
+
+		terrain_seed = dist(rng);
+
 		setup_shaders();
+
+		chunk = generate_new_chunk();
 	}
 
 	~terrain_t() = default;
 
-#if 0
-	void get_noise_height(vector2i pos)
+	void shutdown()
 	{
-		FastNoiseLite noise1 = {};
-		FastNoiseLite noise2 = {};
-		FastNoiseLite noise3 = {};
-	}
-#endif
+		grass_texture.reset();
+		cliff_texture.reset();
+		sand_texture.reset();
 
-	chunk_data_t generate_new_chunk(vector2i pos_)
+		pVs->Release();
+		pPs->Release();
+		pLayout->Release();
+		pConstantBuffer->Release();
+	}
+
+	chunk_data_t generate_new_chunk(vec2i pos_ = {0,0})
 	{
 		chunk_data_t chunk = {};
 
@@ -1334,26 +1399,48 @@ struct terrain_t
 			  pVerticesBuffer, pNormalsBuffer, pUvsBuffer, pIBuffer,
 			  pos] = chunk;
 
-		pos = pos_;
+		pos = pos_ * vec2i(chunk_size);
 
 		//
 		// Noise
 		//
 
-		//std::unique_ptr<std::array<float, (chunk_size+1)*(chunk_size+1)>> grid;
 		auto grid = std::make_shared<std::array<float, (chunk_size+1)*(chunk_size+1)>>();
 
 		grid->fill(0);
 
-		auto chunk_pos = pos * chunk_size;
+		auto chunk_pos = pos * vec2i(chunk_size);
 
 #if 1
 		{
 			FastNoiseLite noise;
-			noise.SetSeed(terrain_seed);//125);
+			noise.SetSeed(terrain_seed);
 
 			noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
-			noise.SetFrequency(0.002f);
+			noise.SetFrequency(0.0001f);
+
+			noise.SetFractalType(FastNoiseLite::FractalType_Ridged);
+			noise.SetFractalOctaves(5);
+			noise.SetFractalLacunarity(1.0f);
+			noise.SetFractalGain(0.3f);
+			noise.SetFractalWeightedStrength(1.0f);
+
+			for(unsigned int i = 0; i < grid->size(); i++)
+			{
+				int x = (i % chunk_size) + pos.x;
+				int y = (i / chunk_size) + pos.y;
+
+				(*grid.get())[i] += (noise.GetNoise((float)x, (float)y) * 500) - 500;
+			}
+		}
+#endif
+#if 1
+		{
+			FastNoiseLite noise;
+			noise.SetSeed(terrain_seed + 1);
+
+			noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
+			noise.SetFrequency(0.001f);
 
 			noise.SetFractalType(FastNoiseLite::FractalType_FBm);
 			noise.SetFractalOctaves(5);
@@ -1366,7 +1453,52 @@ struct terrain_t
 				int x = (i % chunk_size) + pos.x;
 				int y = (i / chunk_size) + pos.y;
 
-				(*grid.get())[i] += noise.GetNoise((float)x, (float)y) * 100;
+				(*grid.get())[i] += noise.GetNoise((float)x, (float)y) * 300;
+			}
+		}
+#endif
+#if 1
+		{
+			FastNoiseLite noise;
+			noise.SetSeed(terrain_seed + 5);
+
+			noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
+			noise.SetFrequency(0.006f);
+
+			noise.SetFractalType(FastNoiseLite::FractalType_FBm);
+			noise.SetFractalOctaves(5);
+			noise.SetFractalLacunarity(1.0f);
+			noise.SetFractalGain(0.3f);
+			noise.SetFractalWeightedStrength(1.0f);
+
+			for(unsigned int i = 0; i < grid->size(); i++)
+			{
+				int x = (i % chunk_size) + pos.x;
+				int y = (i / chunk_size) + pos.y;
+
+				(*grid.get())[i] += noise.GetNoise((float)x, (float)y) * 30;
+			}
+		}
+#endif
+#if 1
+		{
+			FastNoiseLite noise;
+			noise.SetSeed(terrain_seed + 10);
+
+			noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
+			noise.SetFrequency(0.005f);
+
+			noise.SetFractalType(FastNoiseLite::FractalType_FBm);
+			noise.SetFractalOctaves(10);
+
+			for(unsigned int i = 0; i < grid->size(); i++)
+			{
+				int x = (i % chunk_size) + pos.x;
+				int y = (i / chunk_size) + pos.y;
+
+				auto new_noise_height = (*grid.get())[i] + noise.GetNoise((float)x, (float)y) * 10;
+
+				(*grid.get())[i] = new_noise_height;
 			}
 		}
 #endif
@@ -1380,15 +1512,13 @@ struct terrain_t
 
 			noise.SetFractalType(FastNoiseLite::FractalType_FBm);
 			noise.SetFractalOctaves(10);
-			//noise.SetFractalLacunarity(2.1f);
-			noise.SetFractalWeightedStrength(0.2f);
 
 			for(unsigned int i = 0; i < grid->size(); i++)
 			{
 				int x = (i % chunk_size) + pos.x;
 				int y = (i / chunk_size) + pos.y;
 
-				(*grid.get())[i] += noise.GetNoise((float)x, (float)y) * 50;
+				(*grid.get())[i] += noise.GetNoise((float)x, (float)y) * 10;
 			}
 		}
 #endif
@@ -1410,7 +1540,7 @@ struct terrain_t
 				int x = (i % chunk_size) + pos.x;
 				int y = (i / chunk_size) + pos.y;
 
-				(*grid.get())[i] += noise.GetNoise((float)x, (float)y) * 2;
+				(*grid.get())[i] += noise.GetNoise((float)x, (float)y);
 			}
 		}
 #endif
@@ -1423,38 +1553,26 @@ struct terrain_t
 		indices.clear();
 		uvs.clear();
 
-		// TODO: Fix height at end of array
 		for(int x = 0; x < chunk_size; x++)
 		{
 			for(int z = 0; z < chunk_size; z++)
 			{
-				auto grid_pos = vector3f(x,grid.get()->at(chunk_size * z + x),z);
-				auto pos_offset = vector3f(pos.x, 0, pos.y);
+				auto grid_pos = vec3f(x,grid.get()->at(chunk_size * z + x),z);
+				auto pos_offset = vec3f(pos.x, 0, pos.y);
 
 				int index_offset = (int)vertices.size();
 
 #if 1
-				// TODO: Fix height at end of array
+				// FIX: Fix height at end of array
 				// FIRST TRIANGLE
-				vertices.push_back(vector3f(0,0,0) + pos_offset + vector3f(x,grid.get()->at(chunk_size * z + x),z));
-				vertices.push_back(vector3f(1,0,0) + pos_offset + vector3f(x,grid.get()->at((x < chunk_size-1) ? chunk_size * z + (x+1) : chunk_size * z + x),z));
-				vertices.push_back(vector3f(0,0,1) + pos_offset + vector3f(x,grid.get()->at((z < chunk_size-1) ? chunk_size * (z+1) + x : chunk_size * z + x),z));
+				vertices.push_back(vec3f(0,0,0) + pos_offset + vec3f(x,grid.get()->at(chunk_size * z + x),z));
+				vertices.push_back(vec3f(1,0,0) + pos_offset + vec3f(x,grid.get()->at((x < chunk_size-1) ? chunk_size * z + (x+1) : chunk_size * z + x),z));
+				vertices.push_back(vec3f(0,0,1) + pos_offset + vec3f(x,grid.get()->at((z < chunk_size-1) ? chunk_size * (z+1) + x : chunk_size * z + x),z));
 
 				// SECOND TRIANGLE
-				vertices.push_back(vector3f(1,0,0) + pos_offset + vector3f(x,grid.get()->at((x < chunk_size-1) ? chunk_size * z + (x+1) : chunk_size * z + x),z));
-				vertices.push_back(vector3f(0,0,1) + pos_offset + vector3f(x,grid.get()->at((z < chunk_size-1) ? chunk_size * (z+1) + x : chunk_size * z + x),z));
-				vertices.push_back(vector3f(1,0,1) + pos_offset + vector3f(x,grid.get()->at((x < chunk_size-1 && z < chunk_size-1) ? chunk_size * (z+1) + (x+1) : chunk_size * z + x),z));
-#else
-				// FIRST TRIANGLE
-				vertices.push_back(vector3f(0,0,0) + pos_offset + vector3f(x,grid.get()->at(chunk_size * z + x),z));
-				vertices.push_back(vector3f(1,0,0) + pos_offset + vector3f(x,grid.get()->at(chunk_size * z + (x+1)),z));
-				vertices.push_back(vector3f(0,0,1) + pos_offset + vector3f(x,grid.get()->at(chunk_size * (z+1) + x),1));
-
-				// SECOND TRIANGLE
-				vertices.push_back(vector3f(1,0,0) + pos_offset + vector3f(x,grid.get()->at(chunk_size * z + (x+1)),z));
-				vertices.push_back(vector3f(0,0,1) + pos_offset + vector3f(x,grid.get()->at(chunk_size * (z+1) + x),z));
-				vertices.push_back(vector3f(1,0,1) + pos_offset + vector3f(x,grid.get()->at(chunk_size * (z+1) + (x+1)),z));
-#endif
+				vertices.push_back(vec3f(1,0,0) + pos_offset + vec3f(x,grid.get()->at((x < chunk_size-1) ? chunk_size * z + (x+1) : chunk_size * z + x),z));
+				vertices.push_back(vec3f(0,0,1) + pos_offset + vec3f(x,grid.get()->at((z < chunk_size-1) ? chunk_size * (z+1) + x : chunk_size * z + x),z));
+				vertices.push_back(vec3f(1,0,1) + pos_offset + vec3f(x,grid.get()->at((x < chunk_size-1 && z < chunk_size-1) ? chunk_size * (z+1) + (x+1) : chunk_size * z + x),z));
 				
 				uvs.push_back({0,0});
 				uvs.push_back({1,0});
@@ -1472,21 +1590,23 @@ struct terrain_t
 				indices.push_back(index_offset + 4);
 				indices.push_back(index_offset + 5);
 
-				vector3f A = vertices.at(index_offset + 0);
-				vector3f B = vertices.at(index_offset + 1);
-				vector3f C = vertices.at(index_offset + 2);
+				vec3f A = vertices.at(index_offset + 0);
+				vec3f B = vertices.at(index_offset + 1);
+				vec3f C = vertices.at(index_offset + 2);
 
-				normals.push_back(math::cross(A-B,A-C));
-				normals.push_back(math::cross(A-B,A-C));
-				normals.push_back(math::cross(A-B,A-C));
+				normals.push_back(glm::cross(A-B,A-C));
+				normals.push_back(glm::cross(A-B,A-C));
+				normals.push_back(glm::cross(A-B,A-C));
 
-				vector3f E = vertices.at(index_offset + 3);
-				vector3f F = vertices.at(index_offset + 5);
-				vector3f G = vertices.at(index_offset + 4);
+				vec3f E = vertices.at(index_offset + 3);
+				vec3f F = vertices.at(index_offset + 5);
+				vec3f G = vertices.at(index_offset + 4);
 
-				normals.push_back(math::cross(E-F,E-G));
-				normals.push_back(math::cross(E-F,E-G));
-				normals.push_back(math::cross(E-F,E-G));
+				normals.push_back(glm::cross(E-F,E-G));
+				normals.push_back(glm::cross(E-F,E-G));
+				normals.push_back(glm::cross(E-F,E-G));
+#else
+#endif
 			}
 		}
 
@@ -1496,7 +1616,7 @@ struct terrain_t
 
 			D3D11_BUFFER_DESC vertex_buffer_desc = {};
 			vertex_buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
-			vertex_buffer_desc.ByteWidth = (UINT)(sizeof(vector3f) * vertices.size());
+			vertex_buffer_desc.ByteWidth = (UINT)(sizeof(vec3f) * vertices.size());
 			vertex_buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 			vertex_buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
@@ -1514,7 +1634,7 @@ struct terrain_t
 
 			D3D11_BUFFER_DESC normal_buffer_desc = {};
 			normal_buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
-			normal_buffer_desc.ByteWidth = (UINT)(sizeof(vector3f) * normals.size());
+			normal_buffer_desc.ByteWidth = (UINT)(sizeof(vec3f) * normals.size());
 			normal_buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 			normal_buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
@@ -1532,7 +1652,7 @@ struct terrain_t
 
 			D3D11_BUFFER_DESC uvs_buffer_desc = {};
 			uvs_buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
-			uvs_buffer_desc.ByteWidth = (UINT)(sizeof(vector2f) * uvs.size());
+			uvs_buffer_desc.ByteWidth = (UINT)(sizeof(vec2f) * uvs.size());
 			uvs_buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 			uvs_buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
@@ -1569,17 +1689,15 @@ struct terrain_t
 		ID3DBlob* ps;
 		ID3DBlob* errorBlob;
 
-		static constexpr LPCWSTR grid_shader_path = L"../data/terrain.hlsl";
-
 		UINT flags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_DEBUG;
 
 		{
-			HRESULT hr = D3DCompileFromFile(grid_shader_path, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain", "vs_4_0", flags, 0, &vs, &errorBlob);
+			HRESULT hr = D3DCompileFromFile(terrain_shader_path, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain", "vs_4_0", flags, 0, &vs, &errorBlob);
 			assert(SUCCEEDED(hr) && "Vertex Shader failed to compile");
 		}
 
 		{
-			HRESULT hr = D3DCompileFromFile(grid_shader_path, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSMain", "ps_4_0", flags, 0, &ps, &errorBlob);
+			HRESULT hr = D3DCompileFromFile(terrain_shader_path, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSMain", "ps_4_0", flags, 0, &ps, &errorBlob);
 			assert(SUCCEEDED(hr) && "Pixel Shader failed to compile");
 		}
 
@@ -1605,13 +1723,8 @@ struct terrain_t
 		devcon->IASetInputLayout(pLayout);
 
 		{
-			struct VS_CONSTANT_BUFFER
-			{
-				matrix4 view_and_projection;
-			};
-
 			D3D11_BUFFER_DESC constant_buffer_desc = {};
-			constant_buffer_desc.ByteWidth = sizeof(VS_CONSTANT_BUFFER);
+			constant_buffer_desc.ByteWidth = sizeof(CONSTANT_BUFFER);
 			constant_buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
 			constant_buffer_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 			constant_buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -1628,80 +1741,22 @@ struct terrain_t
 		assert(pLayout != NULL);
 	}
 
-	void shutdown()
-	{
-		top_texture.reset();
-		right_texture.reset();
-		front_texture.reset();
-
-		pVs->Release();
-		pPs->Release();
-		pLayout->Release();
-		pConstantBuffer->Release();
-
-		chunk_map.clear();
-	}
-
-	std::vector<std::pair<int,int>> viewed_chunks;
-
-	void update()
-	{
-		// TODO: Multithreaded chunk creation
-		viewed_chunks.clear();
-		for(int i = -chunk_range; i <= chunk_range; i++)
-		{
-			for(int j = -chunk_range; j <= chunk_range; j++)
-			{
-				vector2i p = { i + std::roundf(player.camera.position.x / chunk_size), j + std::roundf(player.camera.position.z / chunk_size)};
-
-				if(chunk_map.contains({p.x,p.y}))
-				{
-				}
-				else
-				{
-					chunk_map.insert({ {p.x,p.y},generate_new_chunk({p.x*chunk_size,p.y*chunk_size}) });
-				}
-
-				viewed_chunks.push_back({p.x,p.y});
-			}
-		}
-
-		for(const auto&[pos, chunk] : chunk_map)
-		{
-			bool viewed = false;
-			for(const auto& viewed_pos : viewed_chunks)
-			{
-				if(pos == viewed_pos)
-				{
-					viewed = true;
-				}
-			}
-
-			if(!viewed)
-			{
-				chunk_map.at(pos).shutdown();
-				chunk_map.erase(chunk_map.find(pos));
-			}
-		}
-	}
+	void update();
 
 	void draw()
 	{
 		{
-			struct VS_CONSTANT_BUFFER
-			{
-				matrix4 view_and_projection;
-			};
-
-			VS_CONSTANT_BUFFER const_buffer = {};
+			CONSTANT_BUFFER const_buffer = {};
 			const_buffer.view_and_projection = projection_matrix * view_matrix;
+			const_buffer.water_level = water_level;
 
 			D3D11_MAPPED_SUBRESOURCE ms;
 			devcon->Map(pConstantBuffer, NULL, D3D11_MAP_WRITE_DISCARD, NULL, &ms);
-			memcpy(ms.pData, &const_buffer, sizeof(VS_CONSTANT_BUFFER));
+			memcpy(ms.pData, &const_buffer, sizeof(CONSTANT_BUFFER));
 			devcon->Unmap(pConstantBuffer, NULL);
 
 			devcon->VSSetConstantBuffers(0, 1, &pConstantBuffer);
+			devcon->PSSetConstantBuffers(0, 1, &pConstantBuffer);
 		}
 		
 		// bind shaders and textures
@@ -1709,31 +1764,33 @@ struct terrain_t
 		devcon->PSSetShader(pPs, 0, 0);
 		devcon->IASetInputLayout(pLayout);
 
-		top_texture->set(0);
-		right_texture->set(1);
-		front_texture->set(2);
+		grass_texture->set(0);
+		cliff_texture->set(1);
+		sand_texture->set(2);
 
-		for(const auto&[pos, chunk] : chunk_map)
-		{
-			devcon->IASetIndexBuffer(chunk.pIBuffer, DXGI_FORMAT_R32_UINT, 0);
+		devcon->IASetIndexBuffer(chunk.pIBuffer, DXGI_FORMAT_R32_UINT, 0);
 
-			ID3D11Buffer* buffers[] = { chunk.pVerticesBuffer, chunk.pNormalsBuffer, chunk.pUvsBuffer };
-			unsigned int stride[] = { sizeof(vector3f), sizeof(vector3f), sizeof(vector2f) };
-			unsigned int offset[] = { 0,0,0 };
+		ID3D11Buffer* buffers[] = { chunk.pVerticesBuffer, chunk.pNormalsBuffer, chunk.pUvsBuffer };
+		unsigned int stride[] = { sizeof(vec3f), sizeof(vec3f), sizeof(vec2f) };
+		unsigned int offset[] = { 0,0,0 };
 
-			devcon->IASetVertexBuffers(0, 3, buffers, stride, offset);
+		devcon->IASetVertexBuffers(0, 3, buffers, stride, offset);
 
-			devcon->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		devcon->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-			devcon->DrawIndexed((UINT)chunk.indices.size(), 0, 0);
-		}
+		devcon->DrawIndexed((UINT)chunk.indices.size(), 0, 0);
 	}
 };
 
+// TODO: Replace skybox with sphere
+// 		 https://www.danielsieger.com/blog/2021/03/27/generating-spheres.html
+// 		 https://gamedev.stackexchange.com/questions/150191/opengl-calculate-uv-sphere-vertices
+
+// TODO: Change skybox to something more fitting
 struct skybox_t
 {
-	std::vector<vector3f> vertices;
-	std::vector<vector2f> uvs;
+	std::vector<vec3f> vertices;
+	std::vector<vec2f> uvs;
 	std::vector<unsigned int> indices;
 
 	ID3D11ShaderResourceView* pTexture;
@@ -2031,7 +2088,7 @@ struct skybox_t
 
 			D3D11_BUFFER_DESC vertex_buffer_desc = {};
 			vertex_buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
-			vertex_buffer_desc.ByteWidth = (UINT)(sizeof(vector3f) * vertices.size());
+			vertex_buffer_desc.ByteWidth = (UINT)(sizeof(vec3f) * vertices.size());
 			vertex_buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 			vertex_buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
@@ -2049,7 +2106,7 @@ struct skybox_t
 
 			D3D11_BUFFER_DESC uvs_buffer_desc = {};
 			uvs_buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
-			uvs_buffer_desc.ByteWidth = (UINT)(sizeof(vector2f) * uvs.size());
+			uvs_buffer_desc.ByteWidth = (UINT)(sizeof(vec2f) * uvs.size());
 			uvs_buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 			uvs_buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
@@ -2084,17 +2141,15 @@ struct skybox_t
 		ID3DBlob* ps;
 		ID3DBlob* errorBlob;
 
-		static constexpr LPCWSTR grid_shader_path = L"../data/skybox.hlsl";
-
 		UINT flags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_DEBUG;
 
 		{
-			HRESULT hr = D3DCompileFromFile(grid_shader_path, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain", "vs_4_0", flags, 0, &vs, &errorBlob);
+			HRESULT hr = D3DCompileFromFile(skybox_shader_path, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain", "vs_4_0", flags, 0, &vs, &errorBlob);
 			assert(SUCCEEDED(hr) && "Vertex Shader failed to compile");
 		}
 
 		{
-			HRESULT hr = D3DCompileFromFile(grid_shader_path, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSMain", "ps_4_0", flags, 0, &ps, &errorBlob);
+			HRESULT hr = D3DCompileFromFile(skybox_shader_path, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSMain", "ps_4_0", flags, 0, &ps, &errorBlob);
 			assert(SUCCEEDED(hr) && "Pixel Shader failed to compile");
 		}
 
@@ -2172,7 +2227,7 @@ struct skybox_t
 		devcon->IASetIndexBuffer(pIBuffer, DXGI_FORMAT_R32_UINT, 0);
 
 		ID3D11Buffer* buffers[] = { pVerticesBuffer, pUvsBuffer };
-		unsigned int stride[] = { sizeof(vector3f), sizeof(vector2f) };
+		unsigned int stride[] = { sizeof(vec3f), sizeof(vec2f) };
 		unsigned int offset[] = { 0,0,0 };
 
 		devcon->IASetVertexBuffers(0, 2, buffers, stride, offset);
@@ -2435,7 +2490,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 
 		case WM_MOUSEMOVE:
 		{
-			vector2i pos = {};
+			vec2i pos = {};
 			pos.x = lparam & 0xffff;
 			pos.y = (lparam >> 16) & 0xffff;
 			input_manager.set_mouse_pos(pos);
@@ -2495,7 +2550,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	devcon->RSSetViewports(1, &viewport);
 
 	// create and set back buffer
-	ID3D11Texture2D* pBackbuffer = {};
+	ID3D11Texture2D* pBackbuffer = NULL;
 	swapchain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID*)&pBackbuffer);
 	dev->CreateRenderTargetView(pBackbuffer, NULL, &backbuffer);
 	pBackbuffer->Release();
@@ -2549,7 +2604,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	depth_stencil_view_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
 	depth_stencil_view_desc.Texture2D.MipSlice = 0;
 
-		hr = dev->CreateDepthStencilView(pDepthStencil, NULL, &depthbuffer);
+	hr = dev->CreateDepthStencilView(pDepthStencil, NULL, &depthbuffer);
 	assert(SUCCEEDED(hr) && "Failed to create depth view");
 
 	pDepthStencil->Release();
@@ -2562,12 +2617,35 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	rasterizer_state_desc.CullMode = D3D11_CULL_FRONT;
 	rasterizer_state_desc.FrontCounterClockwise = false;
 
-	ID3D11RasterizerState* pRasterizerState = {};
+	ID3D11RasterizerState* pRasterizerState = NULL;
 	hr = dev->CreateRasterizerState(&rasterizer_state_desc, &pRasterizerState);
 	assert(SUCCEEDED(hr) && "Failed to create rasterizer state");
 
 	devcon->RSSetState(pRasterizerState);
 	pRasterizerState->Release();
+
+#if 1
+	{
+		ID3D11BlendState* pBlendState = NULL;
+
+		D3D11_BLEND_DESC blend_state_desc = {};
+		blend_state_desc.RenderTarget[0].BlendEnable = true;
+		blend_state_desc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+		blend_state_desc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+		blend_state_desc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+		blend_state_desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+		blend_state_desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+		blend_state_desc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+		blend_state_desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+
+		dev->CreateBlendState(&blend_state_desc, &pBlendState);
+
+		std::array<float,4> blend_factor = {};
+		unsigned int sample_mask = 0xFFFFFFFF;
+
+		devcon->OMSetBlendState(pBlendState, 0, 0xFFFFFFFF);
+	}
+#endif
 
 #ifdef USE_RAW_INPUT
 	// Init input devices
@@ -2578,17 +2656,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	assert(RegisterRawInputDevices(devices, 2, sizeof(devices[0])));
 #endif
 
+	program_clock.start();
+
 	// setup projection and view matrix
 	projection_matrix = glm::perspective(glm::radians(70.0f), (float)DEFAULT_SCREEN_WIDTH / (float)DEFAULT_SCREEN_HEIGHT, NEAR_CLIP_PLANE, FAR_CLIP_PLANE);
 	view_matrix = matrix4(1.0f);
 
 	skybox_t sky;
-
 	terrain_t terrain;
-
-	water_t water = water_t(chunk_size*2, 0);
+	water_t water;
 
 	MSG msg = {};
+
+	log_info("Hello");
 
 	bool is_running = true;
 	while(is_running)
@@ -2610,7 +2690,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 		{
 			// Update
 			player.update();
-			terrain.update();
+
+			water_level += sin(program_clock.get_time()) * 0.01f;
 
 			// Render
 			float color[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -2619,9 +2700,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 			terrain.draw();
 
+			sky.draw();
+
+			// NOTE: Water must be drawn last since its alpha.
 			water.draw();
 
-			sky.draw();
 
 			// TODO: Clouds (maybe?????)
 			// TODO: Draw sun in the sky.
