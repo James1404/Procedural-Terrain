@@ -38,6 +38,8 @@ VS_OUTPUT VSMain(VS_INPUT input)
 	VS_OUTPUT output;
 
 	float4 v = float4(input.position + float3(0,water_level,0), 1);
+	v.y -= sin(time);
+
 	output.position = mul(view_and_projection, v);
 	output.vertex_position = input.position;
 	output.normal = input.normal;
@@ -49,6 +51,8 @@ VS_OUTPUT VSMain(VS_INPUT input)
 // ------------
 // PIXEL SHADER
 // ------------
+
+Texture2D<uint2> depthbuffer : register(t0);
 
 struct PS_INPUT
 {
@@ -67,16 +71,9 @@ PS_OUTPUT PSMain(PS_INPUT input) : SV_TARGET
 {
 	PS_OUTPUT output;
 
-#if 0
-	float4 color = rand(input.texcoord);
-	color *= float4(0, 0.2, 0.4, 0.1);
-
-	output.color = color;
-#endif
-
 	float3 color = 0;
 
-#if 0
+#if 1
 	float2 tc = input.texcoord * 200;
 	float2 i_st = floor(tc);
 	float2 f_st = frac(tc);
@@ -89,7 +86,6 @@ PS_OUTPUT PSMain(PS_INPUT input) : SV_TARGET
 		{
 			float2 neighbor = float2(float(x),float(y));
 
-			// FIX: this is broken somehow.
 			float2 p = random2(neighbor + i_st);
 			p = 0.5 + 0.5 * sin(time + 6.2831*p);
 
@@ -101,13 +97,9 @@ PS_OUTPUT PSMain(PS_INPUT input) : SV_TARGET
 	}
 
 	color += m_dist;
-
-	//color += 1-step(.02,m_dist);
-	//color.r += step(.98, f_st.x) + step(.98, f_st.y);
-#else
-	color = float3(0, .3, .7);
 #endif
 
+	color += float3(0.0, .2, .5);
 	output.color = float4(color,0.5);
 
 	return output;

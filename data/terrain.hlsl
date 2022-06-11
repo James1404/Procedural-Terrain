@@ -8,6 +8,10 @@ cbuffer CONSTANT_BUFFER : register(b0)
 	float water_level;
 };
 
+float random(float2 p) {
+    return frac(sin(dot(p.xy,float2(12.9898,78.233)))*43758.5453123);
+}
+
 // -------------
 // VERTEX SHADER
 // -------------
@@ -111,9 +115,13 @@ PS_OUTPUT PSMain(PS_INPUT input) : SV_TARGET
 	float4 color = grass_triplanar_mapping(input.vertex_position, input.normal, input.texcoord);
 	
 	float4 underwater_color = sand_texture.Sample(sand_sampler, input.texcoord / texture_scale);
+	float water_blend_max = 10 + 
+							sin((input.vertex_position.x +
+							 	 input.vertex_position.z) * 0.2);
+	float water_blend_min = 1;
 
-	float water_blend_strength = 15;
-	float blend_value = smoothstep(water_level+water_blend_strength,water_level-water_blend_strength,input.vertex_position.y);
+	// TODO: randomize height so the sand is less uniform
+	float blend_value = smoothstep(water_level+water_blend_max,water_level-water_blend_min,input.vertex_position.y);
 
 	color = lerp(color,underwater_color,blend_value); 
 

@@ -2,6 +2,7 @@
 #include <d3d11.h>
 #include <dxgi.h>
 #include <d3dcompiler.h>
+#include <winuser.h>
 
 #pragma comment(lib, "user32")
 #pragma comment(lib, "d3d11.lib")
@@ -36,6 +37,7 @@
 #include <algorithm>
 #include <thread>
 #include <cmath>
+#include <numbers>
 
 using vec3f = glm::vec3;
 using vec3d = glm::dvec3;
@@ -73,6 +75,7 @@ IDXGISwapChain* swapchain;
 ID3D11Device* dev;
 ID3D11DeviceContext* devcon;
 ID3D11RenderTargetView* backbuffer;
+
 ID3D11DepthStencilView* depthbuffer;
 
 constexpr float NEAR_CLIP_PLANE = 0.1f;
@@ -363,16 +366,16 @@ struct texture_t
 	}
 };
 
-struct vertex_t
-{
-	vec3f position;
-	vec3f normal;
-	vec2f tex_coords;
-};
-
 struct model_t
 {
+	struct vertex_t
+	{
+		vec3f position;
+		vec3f normal;
+		vec2f tex_coords;
+	};
 	std::vector<vertex_t> vertices;
+
 	std::vector<unsigned int> indices;
 
 	ID3D11Buffer* pVBuffer;
@@ -1182,6 +1185,8 @@ struct water_t
 		devcon->PSSetShader(pPs, 0, 0);
 		devcon->IASetInputLayout(pLayout);
 
+		//devcon->PSSetShaderResources(1, 1, depthbuffer);
+
 		devcon->IASetIndexBuffer(pIBuffer, DXGI_FORMAT_R32_UINT, 0);
 
 		ID3D11Buffer* buffers[] = { pVerticesBuffer, pNormalsBuffer, pUvsBuffer };
@@ -1299,18 +1304,16 @@ struct player_t
 // TODO: Houses and villages on flat land.
 // TODO: Paths between houses
 
-// TODO: Use Poisson Disk Sampling for trees and maybe grass.
-// 		 https://www.cs.ubc.ca/~rbridson/docs/bridson-siggraph07-poissondisk.pdf
-
 // NOTE: https://en.wikipedia.org/wiki/Sobel_operator
 // NOTE: https://thebookofshaders.com/13/
 // NOTE: https://docs.microsoft.com/en-us/windows/win32/direct3d11/direct3d-11-advanced-stages-tessellation
 
 struct terrain_t
 {
-	// TODO: Add snow on high hills.
 	// TODO: Shadow mapping
 	// TODO: Smooth normals
+	// TODO: Use normal map textures.
+	// TODO: Add snow on high hills.
 	// TODO: Lod
 	// TODO: Biomes
 	// TODO: Grass
@@ -1318,14 +1321,13 @@ struct terrain_t
 	// TODO: Weather (e.g. rain, snow, wind(maybe????), cloudy, sunny etc..)
 	// TODO: Terrain collisions and physics system.
 	// TODO: Water falls, ponds, streams and other water types.
-	// TODO: Use normal map textures.
-	// TODO: Add sand texture
 
 	struct chunk_data_t
 	{
 		std::vector<vec3f> vertices;
 		std::vector<vec3f> normals;
 		std::vector<vec2f> uvs;
+
 		std::vector<unsigned int> indices;
 		ID3D11Buffer* pVerticesBuffer, *pNormalsBuffer, *pUvsBuffer;
 		ID3D11Buffer* pIBuffer;
@@ -1381,10 +1383,6 @@ struct terrain_t
 
 	void shutdown()
 	{
-		grass_texture.reset();
-		cliff_texture.reset();
-		sand_texture.reset();
-
 		pVs->Release();
 		pPs->Release();
 		pLayout->Release();
@@ -1562,7 +1560,6 @@ struct terrain_t
 
 				int index_offset = (int)vertices.size();
 
-#if 1
 				// FIX: Fix height at end of array
 				// FIRST TRIANGLE
 				vertices.push_back(vec3f(0,0,0) + pos_offset + vec3f(x,grid.get()->at(chunk_size * z + x),z));
@@ -1590,23 +1587,24 @@ struct terrain_t
 				indices.push_back(index_offset + 4);
 				indices.push_back(index_offset + 5);
 
+
 				vec3f A = vertices.at(index_offset + 0);
 				vec3f B = vertices.at(index_offset + 1);
 				vec3f C = vertices.at(index_offset + 2);
 
-				normals.push_back(glm::cross(A-B,A-C));
-				normals.push_back(glm::cross(A-B,A-C));
-				normals.push_back(glm::cross(A-B,A-C));
+				vec3f normal1 = glm::normalize(glm::cross(A-B,A-C));
+				normals.push_back(normal1);
+				normals.push_back(normal1);
+				normals.push_back(normal1);
 
 				vec3f E = vertices.at(index_offset + 3);
 				vec3f F = vertices.at(index_offset + 5);
 				vec3f G = vertices.at(index_offset + 4);
 
-				normals.push_back(glm::cross(E-F,E-G));
-				normals.push_back(glm::cross(E-F,E-G));
-				normals.push_back(glm::cross(E-F,E-G));
-#else
-#endif
+				vec3f normal2 = glm::normalize(glm::cross(E-F,E-G));
+				normals.push_back(normal2);
+				normals.push_back(normal2);
+				normals.push_back(normal2);
 			}
 		}
 
@@ -1741,7 +1739,53 @@ struct terrain_t
 		assert(pLayout != NULL);
 	}
 
-	void update();
+	void generate_trees()
+	{
+		std::random_device device;
+		auto rng = std::mt19937(device());
+
+		auto random_point_around = [&](vec2f p, float min_dist) -> vec2f
+		{
+			auto dist = std::uniform_real_distribution<>(0.0, 1.0);
+
+			vec2d r = { dist(rng),dist(rng) };
+			double radius = min_dist*(r.x+1);
+			double angle = 2 * std::numbers::pi * r.y;
+
+			vec2f n = { p.x+radius*cos(angle),
+						p.y+radius*sin(angle) };
+			
+			return n;
+		};
+
+		// TODO: Finish this.
+		// https://www.cs.ubc.ca/~rbridson/docs/bridson-siggraph07-poissondisk.pdf
+		// http://devmag.org.za/2009/05/03/poisson-disk-sampling/
+		// https://www.jasondavies.com/poisson-disc/
+
+		auto dist = std::uniform_int_distribution<std::mt19937::result_type>(0, chunk_size*chunk_size);
+
+		auto grid = std::array<int, chunk_size*chunk_size>();
+		grid.fill(-1);
+
+		int r0 = dist(rng);
+		grid.at(r0) = 0;
+
+		std::vector<int> active;
+		active.push_back(r0);
+
+		constexpr int new_points_count = 5;
+		constexpr float min_dist = 2.0f;
+
+		while(!active.empty())
+		{
+			int p = active.front();
+			for(int i = 0; i < new_points_count; i++)
+			{
+				auto n = random_point_around({ p / chunk_size, p % chunk_size }, min_dist);
+			}
+		}
+	}
 
 	void draw()
 	{
@@ -1782,19 +1826,11 @@ struct terrain_t
 	}
 };
 
-// TODO: Replace skybox with sphere
-// 		 https://www.danielsieger.com/blog/2021/03/27/generating-spheres.html
-// 		 https://gamedev.stackexchange.com/questions/150191/opengl-calculate-uv-sphere-vertices
-
-// TODO: Change skybox to something more fitting
 struct skybox_t
 {
 	std::vector<vec3f> vertices;
 	std::vector<vec2f> uvs;
 	std::vector<unsigned int> indices;
-
-	ID3D11ShaderResourceView* pTexture;
-	ID3D11SamplerState* pSampleState;
 
 	ID3D11Buffer* pVerticesBuffer, *pNormalsBuffer, *pUvsBuffer;
 	ID3D11Buffer* pIBuffer;
@@ -1804,154 +1840,112 @@ struct skybox_t
 	ID3D11InputLayout* pLayout;
 	ID3D11Buffer* pConstantBuffer;
 
+	static constexpr int sphere_segments = 32;
+	static constexpr int sphere_rings = 32;
+
 	skybox_t()
 	{
 		vertices.clear();
 		indices.clear();
 		uvs.clear();
 		
-		// set vertices, indices and uvs. (i dont think well need normals)
+		auto v0 = vec3f(0,1,0);
+		vertices.push_back(v0);
+
+		for(int i = 0; i < sphere_rings-1; i++)
 		{
-			// negative y face
-			int index_offset = (int)vertices.size();
+			auto phi = std::numbers::pi *
+				       static_cast<double>(i + 1) /
+				       static_cast<double>(sphere_rings);
 
-			vertices.push_back({ -1,-1,-1 });
-			vertices.push_back({  1,-1,-1 });
-			vertices.push_back({ -1,-1, 1 });
-			vertices.push_back({  1,-1, 1 });
+			for(int j = 0; j < sphere_segments; j++)
+			{
+				auto theta = 2.0 * std::numbers::pi * static_cast<double>(j) /
+													  static_cast<double>(sphere_rings);
+				
+				auto x = std::sin(phi) * std::cos(theta);
+				auto y = std::cos(phi);
+				auto z = std::sin(phi) * std::sin(theta);
 
-			indices.push_back(index_offset + 0);
-			indices.push_back(index_offset + 2);
-			indices.push_back(index_offset + 3);
-
-			indices.push_back(index_offset + 0);
-			indices.push_back(index_offset + 3);
-			indices.push_back(index_offset + 1);
-
-			uvs.push_back({ 0,0 });
-			uvs.push_back({ 1,0 });
-			uvs.push_back({ 0,1 });
-			uvs.push_back({ 1,1 });
+				vertices.push_back({ x,y,z });
+			}
 		}
 
+		auto v1 = vec3f(0,-1,0);
+		vertices.push_back(v1);
+
+		for(int i = 0; i < sphere_segments; ++i)
 		{
-			// positive y face
-			int index_offset = (int)vertices.size();
+			auto i0 = i + 1;
+			auto i1 = (i + 1) % sphere_segments + 1;
 
-			vertices.push_back({ -1,1,-1 });
-			vertices.push_back({  1,1,-1 });
-			vertices.push_back({ -1,1, 1 });
-			vertices.push_back({  1,1, 1 });
+			int index = (int)vertices.size();
 
-			indices.push_back(index_offset + 0);
-			indices.push_back(index_offset + 3);
-			indices.push_back(index_offset + 2);
+			vertices.push_back(v0);
+			vertices.push_back(vertices.at(i1));
+			vertices.push_back(vertices.at(i0));
 
-			indices.push_back(index_offset + 0);
-			indices.push_back(index_offset + 1);
-			indices.push_back(index_offset + 3);
+			indices.push_back(index + 0);
+			indices.push_back(index + 2);
+			indices.push_back(index + 1);
 
-			uvs.push_back({ 0,0 });
-			uvs.push_back({ 1,0 });
-			uvs.push_back({ 0,1 });
-			uvs.push_back({ 1,1 });
+			i0 = i + sphere_segments * (sphere_rings - 2) + 1;
+			i1 = (i + 1) % sphere_segments + sphere_segments * (sphere_rings - 2) + 1;
+
+			index = (int)vertices.size();
+
+			vertices.push_back(v1);
+			vertices.push_back(vertices.at(i0));
+			vertices.push_back(vertices.at(i1));
+
+			indices.push_back(index + 0);
+			indices.push_back(index + 2);
+			indices.push_back(index + 1);
 		}
 
+		for(int j = 0; j < sphere_rings - 2; j++)
 		{
-			// negative x face
-			int index_offset = (int)vertices.size();
+			auto j0 = j * sphere_segments + 1;
+			auto j1 = (j + 1) * sphere_segments + 1;
+			for(int i = 0; i < sphere_segments; i++)
+			{
+				auto i0 = j0 + i;
+				auto i1 = j0 + (i + 1) % sphere_segments;
+				auto i2 = j1 + (i + 1) % sphere_segments;
+				auto i3 = j1 + i;
 
-			vertices.push_back({ -1,-1,-1 });
-			vertices.push_back({ -1,-1, 1 });
-			vertices.push_back({ -1, 1,-1 });
-			vertices.push_back({ -1, 1, 1 });
+				int index = (int)vertices.size();
 
-			indices.push_back(index_offset + 0);
-			indices.push_back(index_offset + 2);
-			indices.push_back(index_offset + 3);
+				vertices.push_back(vertices.at(i0));
+				vertices.push_back(vertices.at(i1));
+				vertices.push_back(vertices.at(i2));
+				vertices.push_back(vertices.at(i3));
 
-			indices.push_back(index_offset + 0);
-			indices.push_back(index_offset + 3);
-			indices.push_back(index_offset + 1);
+				indices.push_back(index + 0);
+				indices.push_back(index + 2);
+				indices.push_back(index + 1);
 
-			uvs.push_back({ 0,0 });
-			uvs.push_back({ 1,0 });
-			uvs.push_back({ 0,1 });
-			uvs.push_back({ 1,1 });
+				indices.push_back(index + 3);
+				indices.push_back(index + 2);
+				indices.push_back(index + 0);
+			}
 		}
 
+		// FIX: UVS are broken down the seam
+		// could maybe fix by duplicating vertices.
+
+		for(auto&& vertex : vertices)
 		{
-			// positive x face
-			int index_offset = (int)vertices.size();
+			vec3f n = glm::normalize(vertex);
 
-			vertices.push_back({ 1,-1,-1 });
-			vertices.push_back({ 1,-1, 1 });
-			vertices.push_back({ 1, 1,-1 });
-			vertices.push_back({ 1, 1, 1 });
+			vec2f uv = { atan2(n.x,n.z) / (2*std::numbers::pi) + 0.5f,
+						 n.y * 0.5f + 0.5f };
 
-			indices.push_back(index_offset + 0);
-			indices.push_back(index_offset + 3);
-			indices.push_back(index_offset + 2);
-
-			indices.push_back(index_offset + 0);
-			indices.push_back(index_offset + 1);
-			indices.push_back(index_offset + 3);
-
-			uvs.push_back({ 0,0 });
-			uvs.push_back({ 1,0 });
-			uvs.push_back({ 0,1 });
-			uvs.push_back({ 1,1 });
-		}
-
-		{
-			// negative z face
-			int index_offset = (int)vertices.size();
-
-			vertices.push_back({ -1,-1,-1 });
-			vertices.push_back({  1,-1,-1 });
-			vertices.push_back({ -1, 1,-1 });
-			vertices.push_back({  1, 1,-1 });
-
-			indices.push_back(index_offset + 0);
-			indices.push_back(index_offset + 3);
-			indices.push_back(index_offset + 2);
-
-			indices.push_back(index_offset + 0);
-			indices.push_back(index_offset + 1);
-			indices.push_back(index_offset + 3);
-
-			uvs.push_back({ 0,0 });
-			uvs.push_back({ 1,0 });
-			uvs.push_back({ 0,1 });
-			uvs.push_back({ 1,1 });
-		}
-
-		{
-			// positive z face
-			int index_offset = (int)vertices.size();
-
-			vertices.push_back({ -1,-1,1 });
-			vertices.push_back({  1,-1,1 });
-			vertices.push_back({ -1, 1,1 });
-			vertices.push_back({  1, 1,1 });
-
-			indices.push_back(index_offset + 0);
-			indices.push_back(index_offset + 2);
-			indices.push_back(index_offset + 3);
-
-			indices.push_back(index_offset + 0);
-			indices.push_back(index_offset + 3);
-			indices.push_back(index_offset + 1);
-
-			uvs.push_back({ 0,0 });
-			uvs.push_back({ 1,0 });
-			uvs.push_back({ 0,1 });
-			uvs.push_back({ 1,1 });
+			uvs.push_back(uv);
 		}
 
 		setup_buffers();
 		setup_shaders();
-		setup_textures();
 	}
 
 	~skybox_t()
@@ -1959,9 +1953,6 @@ struct skybox_t
 		vertices.clear();
 		uvs.clear();
 		indices.clear();
-
-		pTexture->Release();
-		pSampleState->Release();
 
 		pVerticesBuffer->Release();
 		pNormalsBuffer->Release();
@@ -1973,112 +1964,6 @@ struct skybox_t
 		pPs->Release();
 		pLayout->Release();
 		pConstantBuffer->Release();
-	}
-
-	void setup_textures()
-	{
-		std::array<std::string, 6> images =
-		{
-			"../data/sky/right.jpg",
-			"../data/sky/left.jpg",
-			"../data/sky/top.jpg",
-			"../data/sky/bottom.jpg",
-			"../data/sky/front.jpg",
-			"../data/sky/back.jpg"
-		};
-
-		std::array<unsigned char*, 6> texture_data;
-
-		int width, height, nrcomponents, desired_channels = 4;
-		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
-
-		for(int i = 0; i < texture_data.size(); i++)
-		{
-			unsigned char* data = stbi_load(images[i].c_str(), &width, &height, &nrcomponents, desired_channels);
-
-			assert(data && "Texture failed to load");
-
-			if(data)
-			{
-				if (nrcomponents == 1)
-				{
-					format = DXGI_FORMAT_R8_UNORM;
-				}
-				else if (nrcomponents == 3)
-				{
-					// if RGB just use RGBA no RGB format;
-					format = DXGI_FORMAT_R8G8B8A8_UNORM;
-				}
-				else if (nrcomponents == 4)
-				{
-					format = DXGI_FORMAT_R8G8B8A8_UNORM;
-				}
-
-				assert(format != DXGI_FORMAT_UNKNOWN);
-
-				texture_data.at(i) = data;
-			}
-		}
-
-		ID3D11Texture2D* texture = {};
-
-		static constexpr int mip_levels = 1;
-
-		{
-			D3D11_TEXTURE2D_DESC texture_desc = {};
-			texture_desc.Width = width;
-			texture_desc.Height = height;
-			texture_desc.MipLevels = mip_levels;
-			texture_desc.ArraySize = 6;
-			texture_desc.Format = format;
-			texture_desc.SampleDesc.Count = 1;
-			texture_desc.SampleDesc.Quality = 0;
-			texture_desc.Usage = D3D11_USAGE_IMMUTABLE;
-			texture_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-			texture_desc.CPUAccessFlags = 0;
-			texture_desc.MiscFlags = D3D11_RESOURCE_MISC_TEXTURECUBE;
-			
-			std::array<D3D11_SUBRESOURCE_DATA,6> init_data;
-			for(int i = 0; i < init_data.size(); i++)
-			{
-				init_data.at(i).pSysMem = texture_data.at(i);
-				init_data.at(i).SysMemPitch = width * 4;
-				init_data.at(i).SysMemSlicePitch = 0;
-			}
-			
-			HRESULT hr = dev->CreateTexture2D(&texture_desc, &init_data.front(), &texture);
-			assert(SUCCEEDED(hr) && "Failed Texture Creation");
-		}
-
-		{
-			D3D11_SHADER_RESOURCE_VIEW_DESC tex_view_desc = {};
-			tex_view_desc.Format = format;
-			tex_view_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
-			tex_view_desc.TextureCube.MipLevels = mip_levels;
-			tex_view_desc.TextureCube.MostDetailedMip = 0;
-
-			HRESULT hr = dev->CreateShaderResourceView(texture, &tex_view_desc, &pTexture);
-			assert(SUCCEEDED(hr) && "Failed to creater shader resource for texture");
-		}
-
-		{
-			D3D11_SAMPLER_DESC samplerDesc = {};
-			samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-			samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
-			samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
-			samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
-			samplerDesc.ComparisonFunc = D3D11_COMPARISON_ALWAYS;
-			samplerDesc.MinLOD = 0;
-			samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-
-			HRESULT hr = dev->CreateSamplerState(&samplerDesc, &pSampleState);
-			assert(SUCCEEDED(hr) && "Failed to create sampler");
-		}
-
-		for(auto&& tex : texture_data)
-		{
-			stbi_image_free(tex);
-		}
 	}
 	
 	void setup_buffers()
@@ -2135,6 +2020,13 @@ struct skybox_t
 		assert(pIBuffer != NULL);
 	}
 
+	__declspec(align(16))
+	struct CONSTANT_BUFFER
+	{
+		matrix4 view_and_projection;
+		float time;
+	};
+
 	void setup_shaders()
 	{
 		ID3DBlob* vs;
@@ -2145,17 +2037,20 @@ struct skybox_t
 
 		{
 			HRESULT hr = D3DCompileFromFile(skybox_shader_path, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain", "vs_4_0", flags, 0, &vs, &errorBlob);
+
 			assert(SUCCEEDED(hr) && "Vertex Shader failed to compile");
+			assert(errorBlob == NULL);
+			assert(vs != NULL);
 		}
 
 		{
 			HRESULT hr = D3DCompileFromFile(skybox_shader_path, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSMain", "ps_4_0", flags, 0, &ps, &errorBlob);
+
 			assert(SUCCEEDED(hr) && "Pixel Shader failed to compile");
+			assert(errorBlob == NULL);
+			assert(ps != NULL);
 		}
 
-		assert(errorBlob == NULL);
-		assert(vs != NULL);
-		assert(ps != NULL);
 
 		dev->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), NULL, &pVs);
 		dev->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), NULL, &pPs);
@@ -2174,13 +2069,8 @@ struct skybox_t
 		devcon->IASetInputLayout(pLayout);
 
 		{
-			struct VS_CONSTANT_BUFFER
-			{
-				matrix4 view_and_projection;
-			};
-
 			D3D11_BUFFER_DESC constant_buffer_desc = {};
-			constant_buffer_desc.ByteWidth = sizeof(VS_CONSTANT_BUFFER);
+			constant_buffer_desc.ByteWidth = sizeof(CONSTANT_BUFFER);
 			constant_buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
 			constant_buffer_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 			constant_buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -2192,6 +2082,7 @@ struct skybox_t
 			assert(SUCCEEDED(hr));
 
 			devcon->VSSetConstantBuffers(0, 1, &pConstantBuffer);
+			devcon->PSSetConstantBuffers(0, 1, &pConstantBuffer);
 		}
 
 		assert(pLayout != NULL);
@@ -2200,17 +2091,13 @@ struct skybox_t
 	void draw()
 	{
 		{
-			struct VS_CONSTANT_BUFFER
-			{
-				matrix4 view_and_projection;
-			};
-
-			VS_CONSTANT_BUFFER const_buffer = {};
+			CONSTANT_BUFFER const_buffer = {};
 			const_buffer.view_and_projection = projection_matrix * matrix4(glm::mat3(view_matrix));
+			const_buffer.time = program_clock.get_time();
 
 			D3D11_MAPPED_SUBRESOURCE ms;
 			devcon->Map(pConstantBuffer, NULL, D3D11_MAP_WRITE_DISCARD, NULL, &ms);
-			memcpy(ms.pData, &const_buffer, sizeof(VS_CONSTANT_BUFFER));
+			memcpy(ms.pData, &const_buffer, sizeof(CONSTANT_BUFFER));
 			devcon->Unmap(pConstantBuffer, NULL);
 
 			devcon->VSSetConstantBuffers(0, 1, &pConstantBuffer);
@@ -2220,9 +2107,6 @@ struct skybox_t
 		devcon->VSSetShader(pVs, 0, 0);
 		devcon->PSSetShader(pPs, 0, 0);
 		devcon->IASetInputLayout(pLayout);
-
-		devcon->PSSetShaderResources(0, 1, &pTexture);
-		devcon->PSSetSamplers(0, 1, &pSampleState);
 
 		devcon->IASetIndexBuffer(pIBuffer, DXGI_FORMAT_R32_UINT, 0);
 
@@ -2283,15 +2167,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 					depth_texture_desc.ArraySize = 1;
 					depth_texture_desc.SampleDesc.Count = 1;
 					depth_texture_desc.SampleDesc.Quality = 0;
-					depth_texture_desc.Format = DXGI_FORMAT_D32_FLOAT;
-
-					depth_texture_desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+					depth_texture_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+					depth_texture_desc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
 
 					ID3D11Texture2D* pDepthStencil = {};
 					hr = dev->CreateTexture2D(&depth_texture_desc, NULL, &pDepthStencil);
 					assert(SUCCEEDED(hr) && "Failed to recreate depth texture");
 
-					hr = dev->CreateDepthStencilView(pDepthStencil, NULL, &depthbuffer);
+					D3D11_DEPTH_STENCIL_VIEW_DESC depth_stencil_view_desc = {};
+					//depth_stencil_view_desc.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+					depth_stencil_view_desc.Format = DXGI_FORMAT_D32_FLOAT;
+					depth_stencil_view_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+					depth_stencil_view_desc.Texture2D.MipSlice = 0;
+					//depth_stencil_view_desc.Flags = D3D11_DSV_READ_ONLY_DEPTH;
+
+					hr = dev->CreateDepthStencilView(pDepthStencil, &depth_stencil_view_desc, &depthbuffer);
 					assert(SUCCEEDED(hr) && "Failed to recreate depth view");
 
 					pDepthStencil->Release();
@@ -2564,8 +2454,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	depth_texture_desc.ArraySize = 1;
 	depth_texture_desc.SampleDesc.Count = 1;
 	depth_texture_desc.SampleDesc.Quality = 0;
-	depth_texture_desc.Format = DXGI_FORMAT_D32_FLOAT; //DXGI_FORMAT_D24_UNORM_S8_UINT;
-	depth_texture_desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+	depth_texture_desc.Format = DXGI_FORMAT_R32_TYPELESS; //DXGI_FORMAT_D24_UNORM_S8_UINT;
+	depth_texture_desc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
 
 	ID3D11Texture2D* pDepthStencil = NULL;
 	HRESULT hr = dev->CreateTexture2D(&depth_texture_desc, NULL, &pDepthStencil);
@@ -2600,11 +2490,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	devcon->OMSetDepthStencilState(pDepthStencilState, 1);
 
 	D3D11_DEPTH_STENCIL_VIEW_DESC depth_stencil_view_desc = {};
-	depth_stencil_view_desc.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+	depth_stencil_view_desc.Format = DXGI_FORMAT_D32_FLOAT;
 	depth_stencil_view_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
 	depth_stencil_view_desc.Texture2D.MipSlice = 0;
 
-	hr = dev->CreateDepthStencilView(pDepthStencil, NULL, &depthbuffer);
+	hr = dev->CreateDepthStencilView(pDepthStencil, &depth_stencil_view_desc, &depthbuffer);
 	assert(SUCCEEDED(hr) && "Failed to create depth view");
 
 	pDepthStencil->Release();
@@ -2691,10 +2581,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 			// Update
 			player.update();
 
-			water_level += sin(program_clock.get_time()) * 0.01f;
-
 			// Render
-			float color[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+			float color[4] = { 0.1f, 0.5f, 0.7f, 0.0f };
 			devcon->ClearRenderTargetView(backbuffer, color);
 			devcon->ClearDepthStencilView(depthbuffer, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
 
